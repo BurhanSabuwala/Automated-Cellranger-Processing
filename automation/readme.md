@@ -1,0 +1,9 @@
+1. Subject Samplesheet containing SRA accession IDs: This step involves preparing a CSV file that lists the SRA accession numbers, which are unique identifiers for data sets within the SRA database.
+2. Generate multi_config.csv: Based on the samplesheet, a configuration file in CSV format is generated. This file likely contains the parameters and settings for the subsequent data processing steps.
+3. Prefetch SRA files: This step involves using a tool (presumably SRA Toolkit's prefetch command) to download the SRA files corresponding to the accession IDs listed in the samplesheet.
+4. Run fastq-dump: The fastq-dump tool from the SRA Toolkit is used to convert SRA files into FASTQ files, a format commonly used for storing sequencing reads.
+5. Rename fastq-dump files: The FASTQ files obtained in the previous step are renamed, probably for consistency or to match the expected input format for the next analysis step.
+6. Run Cellranger multi: This step involves running Cellranger multi, a command-line tool that processes sequencing data for single-cell RNA sequencing (scRNA-seq) analysis. The tool is part of the Cell Ranger suite, which is used for analyzing scRNA-seq data.
+7. Copy the resulting data: The processed data from Cellranger are then copied to a designated location for further use or storage.
+8. Clean work directory: After the necessary files are copied, the working directory is cleaned up, likely removing temporary files and intermediate data to save space and reduce clutter.
+9. Output - Count Matrix and QC metrics: The final outputs of this pipeline are a count matrix and quality control (QC) metrics. The count matrix contains the number of reads (or unique molecular identifiers) for each gene in each cell, which is crucial for downstream scRNA-seq analysis. The QC metrics provide information on the quality of the data, which is important for assessing the reliability of the results.
