@@ -1,3 +1,1 @@
-# DARPA-AIM-compendium
-
-Codes for DARPA AIM Compendium
+# Codes for processing cellranger files
