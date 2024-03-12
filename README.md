@@ -1,1 +1,1 @@
-# Codes for processing cellranger files
+# Codes for processing single cell files through cellranger
