@@ -13,7 +13,7 @@
 module load CellRanger/7.0.1
 
 # Path to the CSV files with SRA IDs
-SRA_SHEET="/path/to/srasheet_Subj2049.csv
+SRA_SHEET="/path/to/srasheet_Subj2049.csv"
 
 # Read SRA IDs from the CSV file into a variable
 SRR_LIST=$(awk -F ',' 'NR>1 {print $2}' $SRA_SHEET)
