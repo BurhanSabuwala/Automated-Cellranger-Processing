@@ -3,15 +3,20 @@
 #SBATCH --output=cellranger_submitter_%j.out
 #SBATCH --error=cellranger_submitter_%j.err
 #SBATCH --time=2:00:00
-#SBATCH --mem=8G
+#SBATCH --mem=4G
 #SBATCH --cpus-per-task=2
 #SBATCH --partition=pi_kleinstein
+
+# Note: For subject 2049, we only have gene expression data. Therefore, this script is only intended to run cellranger count.
 
 # Load the Cell Ranger module
 module load CellRanger/7.0.1
 
-# List of SRR IDs
-SRR_LIST="SRR14219617 SRR14219618 SRR14219619 SRR14219620 SRR14219621 SRR14219622 SRR14219623 SRR14219624"
+# Path to the CSV files with SRA IDs
+SRA_SHEET="/path/to/srasheet_Subj2049.csv
+
+# Read SRA IDs from the CSV file into a variable
+SRR_LIST=$(awk -F ',' 'NR>1 {print $2}' $SRA_SHEET)
 
 # Iterate over each SRR ID and submit cellranger count job
 for SRR_ID in $SRR_LIST; do
