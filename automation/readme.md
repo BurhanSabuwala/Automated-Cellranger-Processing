@@ -1,9 +1,19 @@
-1. Subject Samplesheet containing SRA accession IDs: This step involves preparing a CSV file that lists the SRA accession numbers, which are unique identifiers for data sets within the SRA database.
-2. Generate multi_config.csv: Based on the samplesheet, a configuration file in CSV format is generated. This file likely contains the parameters and settings for the subsequent data processing steps.
-3. Prefetch SRA files: This step involves using a tool (presumably SRA Toolkit's prefetch command) to download the SRA files corresponding to the accession IDs listed in the samplesheet.
-4. Run fastq-dump: The fastq-dump tool from the SRA Toolkit is used to convert SRA files into FASTQ files, a format commonly used for storing sequencing reads.
-5. Rename fastq-dump files: The FASTQ files obtained in the previous step are renamed, probably for consistency or to match the expected input format for the next analysis step.
-6. Run Cellranger multi: This step involves running Cellranger multi, a command-line tool that processes sequencing data for single-cell RNA sequencing (scRNA-seq) analysis. The tool is part of the Cell Ranger suite, which is used for analyzing scRNA-seq data.
-7. Copy the resulting data: The processed data from Cellranger are then copied to a designated location for further use or storage.
-8. Clean work directory: After the necessary files are copied, the working directory is cleaned up, likely removing temporary files and intermediate data to save space and reduce clutter.
-9. Output - Count Matrix and QC metrics: The final outputs of this pipeline are a count matrix and quality control (QC) metrics. The count matrix contains the number of reads (or unique molecular identifiers) for each gene in each cell, which is crucial for downstream scRNA-seq analysis. The QC metrics provide information on the quality of the data, which is important for assessing the reliability of the results.
+# Data Processing Workflow
+
+This document outlines the workflow for processing sequencing data from SRA files to Cell Ranger output.
+
+1. **Compile Data**: Aggregate necessary information into a CSV file to guide the download and processing of SRA files.
+
+2. **Prefetch SRA Files**: Utilize the SRA Toolkit's `prefetch` command to download the SRA files specified in the CSV.
+
+3. **Run fastq-dump**: Convert SRA files to FASTQ format using `fastq-dump`.
+   
+5. **Rename Fastq Files**: Rename the fastq-dump output files to appropriate cellranger compatible names
+
+6. **Generate multi_config.csv**: Prepare a CSV file required by Cell Ranger to identify libraries and samples for processing.
+
+7. **Run Cellranger**: Execute the Cell Ranger pipeline to analyze the FASTQ files, producing outputs such as gene expression matrices.
+
+8. **Secure Data**: Copy the Cell Ranger output to a secure, specified location for long-term storage.
+
+9. **Clean Workspace**: Remove the FASTQ and intermediate files from the work directory to conserve space.
