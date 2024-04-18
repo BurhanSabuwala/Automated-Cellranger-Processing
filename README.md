@@ -6,6 +6,8 @@ The processing steps are shown in the image below:
 
 To run the pipeline:
 
+[To do: I will write a script to generate the srasheet_Subjxxxx.csv from the lab metaDataTemplate.xlsx]
+
 **Step 1:** Generate the srasheet_Subjxxxx.csv file. Some example files are 'srasheet_Subj2049.csv', 'srasheet_Subj2047.csv'
 
 **Step 2:** Modify the fastqdumper_xxxx.sh file to the appropriate directories and point to the appropriate srasheet_Subjxxxx.csv sheet. Run the fastqdumper_xxxx.sh
