@@ -175,11 +175,21 @@ p1 + p2
 ```
 
 Filtering step
+
 ```{r}
-seurat_obj <- subset(seurat_obj, subset = percent.mt < max.mitocondrial.percentage)
-seurat_obj <- subset(seurat_obj, subset = nCount_RNA > min.cells)
-seurat_obj <- subset(seurat_obj, subset = nFeature_RNA > min.features)
+n_before_mt    <- ncol(seurat_obj)
+seurat_obj     <- subset(seurat_obj, subset = percent.mt < max.mitocondrial.percentage)
+n_after_mt     <- ncol(seurat_obj)
+
+n_before_count <- ncol(seurat_obj)
+seurat_obj     <- subset(seurat_obj, subset = nCount_RNA > min.cells)
+n_after_count  <- ncol(seurat_obj)
+
+n_before_feat  <- ncol(seurat_obj)
+seurat_obj     <- subset(seurat_obj, subset = nFeature_RNA > min.features)
+n_after_feat   <- ncol(seurat_obj)
 ```
+
 
 
 QC metrics after filtering
@@ -368,6 +378,8 @@ DimPlot(seurat_obj, reduction = "umap",
   ggtitle("Doublet Finder")
 ```
 
+
+
 ## Picking the right resolution for clustering
 
 > **Note:** Clustree and dot plots are intentionally run **before** doublet removal so resolution choices are evaluated on the full, unfiltered cell population.
@@ -388,11 +400,6 @@ clustree(seurat_obj, prefix = "RNA_snn_res.") +
 ### PBMC marker gene panel
 
 Dot plots below use a curated set of canonical PBMC markers to aid cluster identity assignment at each resolution. X-axis gene labels are **color-coded by cell type** so groups are immediately readable.
-
-Cell specific markers:
- - 
-
-
 
 
 ```{r pbmc-markers}
@@ -821,7 +828,9 @@ make_dotplot("RNA_snn_res.1", "Res 1.0")
 
 Remove doublets
 ```{r}
-seurat_obj <- subset(seurat_obj, doublet_finder == "Singlet")
+n_before_doublet <- ncol(seurat_obj)
+seurat_obj       <- subset(seurat_obj, doublet_finder == "Singlet")
+n_after_doublet  <- ncol(seurat_obj)
 ```
 
 
@@ -1046,121 +1055,189 @@ VlnPlot(seurat_obj,
   NoLegend()
 ```
 
-## scType
-
-scType is a fully marker-based classifier that uses our curated `pbmc_markers` gene sets directly — no external reference is needed. It scores each cluster by the scaled expression of positive markers, making the annotation directly consistent with the dot plots.
-
-```{r sctype-setup}
-if (!requireNamespace("HGNChelper", quietly = TRUE)) install.packages("HGNChelper")
-library(HGNChelper)
-
-# Load scType functions directly from GitHub (no package install needed)
-source("https://raw.githubusercontent.com/IanevskiAleksandr/sc-type/master/R/gene_sets_prepare.R")
-source("https://raw.githubusercontent.com/IanevskiAleksandr/sc-type/master/R/sctype_score_.R")
-```
-
-```{r sctype-run}
-# Build the scType marker input from our curated pbmc_markers list.
-# scType expects a data frame with columns: tissueType, cellName, geneSymbolmore1
-# (positive markers). We convert our list directly.
-sctype_markers <- data.frame(
-  tissueType    = "Immune system",
-  cellName      = rep(names(pbmc_markers), sapply(pbmc_markers, length)),
-  geneSymbolmore1 = unlist(pbmc_markers),
-  geneSymbolmore2 = "",   # negative markers — none defined here
-  stringsAsFactors = FALSE
-)
-
-# Scale the full gene matrix (needed for scType scoring)
-seurat_obj <- ScaleData(seurat_obj, features = rownames(seurat_obj), verbose = FALSE)
-
-# Score every cell
-es_max <- sctype_score(
-  scRNAseqData = LayerData(seurat_obj, assay = "RNA", layer = "scale.data"),
-  scaled       = TRUE,
-  gs           = setNames(
-    lapply(names(pbmc_markers), function(ct) pbmc_markers[[ct]]),
-    names(pbmc_markers)
-  ),
-  gs2          = NULL   # no negative markers
-)
-
-# Assign the top-scoring cell type per cluster (using seurat_clusters)
-sctype_results <- do.call(rbind, lapply(unique(seurat_obj$seurat_clusters), function(cl) {
-  cl_cells  <- which(seurat_obj$seurat_clusters == cl)
-  cl_scores <- sort(rowSums(es_max[, cl_cells, drop = FALSE]), decreasing = TRUE)
-  data.frame(
-    cluster       = cl,
-    scType_label  = names(cl_scores)[1],
-    scType_score1 = cl_scores[1],
-    scType_score2 = cl_scores[2],
-    # ratio of top score to runner-up — high ratio = confident call
-    scType_ratio  = cl_scores[1] / max(cl_scores[2], 1),
-    stringsAsFactors = FALSE
-  )
-}))
-
-sctype_results <- sctype_results[order(as.numeric(as.character(sctype_results$cluster))), ]
-print(sctype_results)
-
-# Map cluster-level labels back to individual cells
-cluster_label_map <- setNames(sctype_results$scType_label,
-                               as.character(sctype_results$cluster))
-labels <- cluster_label_map[as.character(seurat_obj$seurat_clusters)]
-names(labels) <- colnames(seurat_obj)
-seurat_obj <- AddMetaData(seurat_obj, metadata = labels, col.name = "scType_label")
-```
-
-```{r sctype-umap}
-DimPlot(seurat_obj,
-        group.by  = "scType_label",
-        reduction = "umap", raster = FALSE,
-        label = TRUE, label.box = TRUE, repel = TRUE, label.size = 3) +
-  NoLegend() +
-  ggtitle("scType – marker-based cluster annotation")
-```
-
 
 # Cell Count Summary
 
 ```{r cell-count-summary}
-# Number of cells from CellRanger (raw, before any filtering)
-n_cells_cellranger <- length(colnames(Read10X(path_to_10x_file)))
+# Raw count from CellRanger
+n_cellranger <- length(colnames(Read10X(path_to_10x_file)))
 
-# Number of cells after full processing (post-QC + doublet removal)
-n_cells_processed <- ncol(seurat_obj)
+# Final processed count
+n_final <- ncol(seurat_obj)
 
-cat("============================================\n")
-cat("         Cell Count Summary\n")
-cat("============================================\n")
-cat(sprintf("Cells from CellRanger output : %d\n", n_cells_cellranger))
-cat(sprintf("Cells after QC & processing  : %d\n", n_cells_processed))
-cat(sprintf("Cells removed                : %d (%.1f%%)\n",
-            n_cells_cellranger - n_cells_processed,ee
-            (n_cells_cellranger - n_cells_processed) / n_cells_cellranger * 100))
-cat("============================================\n")
+# Per-step removals
+removed_mt      <- n_before_mt     - n_after_mt
+removed_count   <- n_before_count  - n_after_count
+removed_feat    <- n_before_feat   - n_after_feat
+removed_doublet <- n_before_doublet - n_after_doublet
+total_removed   <- n_cellranger - n_final
+
+# Sanity check — all steps should sum to total removed
+accounted_for   <- removed_mt + removed_count + removed_feat + removed_doublet
+unaccounted     <- total_removed - accounted_for
+
+cat("=====================================================\n")
+cat("              Cell Count Summary\n")
+cat("=====================================================\n")
+cat(sprintf("CellRanger output              : %6d cells\n", n_cellranger))
+cat("-----------------------------------------------------\n")
+cat(sprintf("Removed: high mitochondria%%     : %6d cells  (%.1f%%)\n",
+            removed_mt,    removed_mt    / n_cellranger * 100))
+cat(sprintf("Removed: low nCount_RNA        : %6d cells  (%.1f%%)\n",
+            removed_count, removed_count / n_cellranger * 100))
+cat(sprintf("Removed: low nFeature_RNA      : %6d cells  (%.1f%%)\n",
+            removed_feat,  removed_feat  / n_cellranger * 100))
+cat(sprintf("Removed: doublets              : %6d cells  (%.1f%%)\n",
+            removed_doublet, removed_doublet / n_cellranger * 100))
+if (unaccounted != 0) {
+  cat(sprintf("Removed: other/unaccounted     : %6d cells  (%.1f%%)\n",
+              unaccounted, unaccounted / n_cellranger * 100))
+}
+cat("-----------------------------------------------------\n")
+cat(sprintf("Total removed                  : %6d cells  (%.1f%%)\n",
+            total_removed, total_removed / n_cellranger * 100))
+cat(sprintf("Final processed object         : %6d cells  (%.1f%%)\n",
+            n_final, n_final / n_cellranger * 100))
+cat("=====================================================\n")
 ```
 
 # Save Seurat object
 ```{r}
 # Save the seurat object
-saveRDS(seurat_obj, file.path(path_to_output_directory, paste0(sample_name, "_processed_object.rds")))
-
+qs_save(seurat_obj, file.path(path_to_output_directory, paste0(sample_name, "_processed_object.qs2")))
 ```
 
 # Subset B cells
 
 
+## B cell label sets per method
+
+```{r bcell-sets}
+# ── Define B/plasma cell labels for each annotation method ───────────────────
+
+cells_hpca <- colnames(seurat_obj)[
+  seurat_obj$SingleR_hpca_main %in% c("B_cell")
+]
+
+cells_monaco <- colnames(seurat_obj)[
+  seurat_obj$SingleR_monaco_main %in% c("B cells")
+]
+
+cells_blueprint <- colnames(seurat_obj)[
+  seurat_obj$SingleR_blueprint_main %in% c("B-cells")
+]
+
+cells_celltypist <- colnames(seurat_obj)[
+  seurat_obj$CellTypist_majority_voting %in% c(
+    "Naive B cells", "Memory B cells", "Age-associated B cells",
+    "Transitional B cells", "B cells", "Germinal center B cells",
+    "Proliferative germinal center B cells", "Plasmablasts", "Plasma cells"
+  )
+]
+
+cells_azimuth <- colnames(seurat_obj)[seurat_obj$predicted.celltype.l1 == "B"]
+
+
+cat("Cells labelled as B cells per method:\n")
+cat(sprintf("  SingleR HPCA      : %d\n", length(cells_hpca)))
+cat(sprintf("  SingleR Monaco    : %d\n", length(cells_monaco)))
+cat(sprintf("  SingleR Blueprint : %d\n", length(cells_blueprint)))
+cat(sprintf("  CellTypist        : %d\n", length(cells_celltypist)))
+cat(sprintf("  Azimuth           : %d\n", length(cells_azimuth)))
+```
+
+## Venn diagram of method overlap
+
+```{r bcell-venn, fig.width=10, fig.height=8, message=FALSE, warning=FALSE}
+if (!requireNamespace("ggVennDiagram", quietly = TRUE)) install.packages("ggVennDiagram")
+library(ggVennDiagram)
+
+venn_sets <- list(
+  "HPCA"       = cells_hpca,
+  "Monaco"     = cells_monaco,
+  "Blueprint"  = cells_blueprint,
+  "CellTypist" = cells_celltypist,
+  "Azimuth"    = cells_azimuth
+)
+
+ggVennDiagram(venn_sets,
+              label       = "count",
+              label_alpha = 0,
+              edge_size   = 0.5) +
+  scale_fill_gradient(low = "#F7FBFF", high = "#2171B5",
+                      name = "Cell count") +
+  scale_color_manual(values = rep("grey40", 6)) +
+  ggtitle("B cell overlap across annotation methods") +
+  theme(plot.title = element_text(hjust = 0.5, face = "bold"))
+```
+
+## Union and consensus summary
+
+```{r bcell-union}
+# Union of all six methods
+all_bcell_cells <- unique(c(
+  cells_hpca, cells_monaco, cells_blueprint,
+  cells_celltypist, cells_azimuth, cells_sctype
+))
+
+# Count how many methods agree per cell
+method_counts <- rowSums(cbind(
+  colnames(seurat_obj) %in% cells_hpca,
+  colnames(seurat_obj) %in% cells_monaco,
+  colnames(seurat_obj) %in% cells_blueprint,
+  colnames(seurat_obj) %in% cells_celltypist,
+  colnames(seurat_obj) %in% cells_azimuth
+))
+names(method_counts) <- colnames(seurat_obj)
+
+cat("============================================\n")
+cat("       B Cell Union Summary\n")
+cat("============================================\n")
+cat(sprintf("Union (>=1 method) : %d cells\n", sum(method_counts >= 1)))
+cat(sprintf("Consensus (>=2)    : %d cells\n", sum(method_counts >= 2)))
+cat(sprintf("Consensus (>=3)    : %d cells\n", sum(method_counts >= 3)))
+cat(sprintf("Consensus (>=4)    : %d cells\n", sum(method_counts >= 4)))
+cat(sprintf("All 6 methods      : %d cells\n", sum(method_counts == 5)))
+cat("============================================\n")
+
+# Store per-cell method agreement count in metadata
+seurat_obj$bcell_method_count <- method_counts
+```
+
+```{r bcell-umap, fig.width=6, fig.height=4}
+p1 <- FeaturePlot(seurat_obj,
+                  features  = "bcell_method_count",
+                  reduction = "umap", raster = FALSE) +
+  scale_colour_gradient(low = "grey90", high = "#08519C",
+                        name = "# methods\ncalling B cell") +
+  ggtitle("Method agreement per cell")
+
+print(p1)
+
+p2 <- DimPlot(seurat_obj,
+              cells.highlight = all_bcell_cells,
+              cols.highlight  = "#2171B5",
+              cols            = "grey90",
+              reduction       = "umap", raster = FALSE) +
+  ggtitle("Union of all B cell calls") +
+  NoLegend()
+
+print(p2)
+```
+
 ```{r}
 # Subset B cells based on SingleR label (main or fine)
-b_cells_hpca_main <- subset(seurat_obj, subset = SingleR_hpca_main == "B_cell")
-b_cells_monaco_main <- subset(seurat_obj, subset = SingleR_monaco_main == "B cells")
-b_cells_blueprint_main <- subset(seurat_obj, subset = SingleR_blueprint_main == "B-cells")
+b_cells_azimuth <- subset(seurat_obj, subset = predicted.celltype.l1 == "B")
+b_cells_celltypist <- subset(seurat_obj, subset = CellTypist_majority_voting %in% c(
+  "Naive B cells", "Memory B cells", "Age-associated B cells",
+  "Transitional B cells", "B cells", "Germinal center B cells",
+  "Proliferative germinal center B cells", "Plasmablasts", "Plasma cells"
+))
+
 
 # Save the subsetted Seurat object
-saveRDS(b_cells_hpca_main, file.path(path_to_output_directory, paste0(sample_name, "_Bcells_hpca_main.rds")))
-saveRDS(b_cells_monaco_main, file.path(path_to_output_directory, paste0(sample_name, "_Bcells_monaco_main.rds")))
-saveRDS(b_cells_blueprint_main, file.path(path_to_output_directory, paste0(sample_name, "_Bcells_blueprint_main.rds")))
+qs_save(b_cells_azimuth, file.path(path_to_output_directory, paste0(sample_name, "_Bcells_azimuth.qs2")))
+qs_save(b_cells_celltypist, file.path(path_to_output_directory, paste0(sample_name, "_Bcells_celltypist.qs2")))
 ```
 
 
