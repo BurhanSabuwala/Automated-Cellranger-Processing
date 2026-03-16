@@ -1,0 +1,516 @@
+---
+title: "Single Cell GEX Processing"
+fontsize: 11pt
+output:
+  html_document:
+    theme: lumen
+    toc: true
+    toc_float: 
+      collapsed: true
+      smooth_scroll: false
+    number_sections: false
+    highlight: tango
+params:
+  path_base: "~/Research/compendium"
+  data_root: "Data"
+  data_id: "SRP372296"
+  sample_id: "SRR18922759"
+  subject_id: "s01"
+  metadata_file: "metaData-Sars-CoV-2.xlsx"
+  ig_tr_file: "~/Research/pipeline/Seurat Processing/resources/QC_features_meta_human_v112.rds"
+  p10x_file: "SRR18922759/filtered_feature_bc_matrix"
+  min.features: 200
+  min.cells: 5
+  max.mitocondrial.percentage: 20
+  is.multi.processed: FALSE
+---
+
+# Setup
+```{r knitr, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)  # Code and results visible
+```
+
+```{r debug-params}
+print(params$path_base)
+```
+
+## Overview
+
+
+**Date Created:** June 27, 2024
+
+**Last Updated:** `r Sys.Date()`
+
+**R version:** `r R.Version()$version.string`<br>
+
+**Platform:** `r R.Version()$platform`<br>
+
+**Running under:** `r sessionInfo()$running`
+
+**Notes:**
+
+
+**To Dos: **
+ - Cell annotations using single R <\br>
+ 
+ Ref to these links:  
+ 
+  - https://github.com/dviraran/SingleR
+  
+  - https://www.singlecellcourse.org/single-cell-rna-seq-analysis-using-seurat.html#basic-quality-control-and-filtering
+  
+  - https://bioconductor.org/books/release/SingleRBook/using-multiple-references.html
+  
+
+
+## Set the environment
+
+### Path to data and working directory
+```{r set environment variables}
+#rm(list = ls())
+
+# Set variables for files
+path_base <- params$path_base
+
+setwd(path_base)
+
+#path_data_root <- file.path(path_base, params$data_root, params$data_id)
+# Removed params$data_id due to differing file structure
+path_data_root <- file.path(path_base, params$data_root)
+path_to_metadata <- file.path(path_data_root, params$metadata_file)
+path_to_10x_file <- file.path(path_data_root, params$p10x_file)
+path_to_ig_tr_file <- params$ig_tr_file
+#path_to_output_directory <- file.path(path_base, "processed-files", params$data_id)
+# Changed "processed-files" to "processed_files"
+path_to_output_directory <- file.path(path_base, "processed_files", params$subject_id, params$data_id)
+sample_name <- params$sample_id
+
+# Thresholds
+min.features = params$min.features
+min.cells = params$min.cells
+max.mitocondrial.percentage = params$max.mitocondrial.percentage
+
+
+
+```
+
+
+### Load library
+```{r}
+# list (and install if needed) CRAN packages
+# TODO: Add annotation packages
+# packages <- c("knitr", "dplyr", "patchwork", "Seurat", "stringr", "tidyverse", "DoubletFinder", "combineSeuratAIRR", "SingleR", "celldex") // removed "combineSeuratAIRR" in this line
+packages <- c("knitr", "dplyr", "patchwork", "Seurat", "stringr", "tidyverse", "DoubletFinder", "SingleR", "celldex") 
+new_pkg <- packages[!(packages %in% installed.packages())]
+if (length(new_pkg)) {install.packages(new_pkg)}
+
+# list (and install if needed) Bioconductor packages
+packages_additional <- c()
+new_pkg_additional <- packages_additional[!(packages_additional %in% installed.packages())]
+if (length(new_pkg_additional)) {BiocManager::install(new_pkg_additional)}
+
+# load packages
+packages <- sort(append(packages, packages_additional)) # so the list of versions will be in order
+for (n in seq_along(packages)) {
+  suppressPackageStartupMessages(library(packages[n], character.only = TRUE))
+  cat(paste0(packages[n], ": ", packageVersion(packages[n]), "\n")) # print simplified package versions
+}
+```
+
+### Setting colors and visualization themes
+
+```{r}
+color_themes <- c(
+"#0CF47A", "#BCF419", "#F4232C", "#CD3E96", "#7B44CD", "#4DCD70", "#A84739", "#277FA9", "#214EA8", "#840071", "#0D0185", "#6F8431", "#665001", "#670D00", "#605669", "#1D1D42", "#462927", "#424124", "#330F00", "#182B32")
+
+mitochondria_scheme <- c("#F55D47", "#7D67FA")
+nFeatures_scheme <- c("#47F5A4")
+ngenes_scheme <- c("#F5DF47")
+```
+
+## Load data
+
+```{r}
+# Read metadata
+#metadata <- read_metadata(path_to_metadata)
+sheet_names <- excel_sheets(path_to_metadata)
+metadata <- lapply(sheet_names, function(s) read_excel(path_to_metadata, sheet = s))
+names(metadata) <- sheet_names
+
+# Read gene expression
+gex_mat <- Read10X(path_to_10x_file)
+
+if (params$is.multi.processed) {
+  seurat_obj <- CreateSeuratObject(gex_mat$`Gene Expression`)
+} else{
+  seurat_obj <- CreateSeuratObject(gex_mat)
+}
+
+rm(gex_mat)
+```
+
+# Single cell Quality Control
+
+## Filtering cells based on minimum features, expressed in very few cells and mitochondrial gene percentage
+
+QC metrics before filtering
+```{r}
+seurat_obj[["percent.mt"]] <- PercentageFeatureSet(seurat_obj, pattern = "^MT-")
+seurat_obj[["percent.rb"]] <- PercentageFeatureSet(seurat_obj, pattern = "^RP[SL]")
+p1 <- VlnPlot(seurat_obj, features = c("nFeature_RNA", "nCount_RNA", "percent.mt", "percent.rb"), ncol = 4) 
+p1
+```
+
+
+
+
+
+```{r}
+p1 <- FeatureScatter(seurat_obj, feature1 = "nCount_RNA", feature2 = "percent.mt") + NoLegend()
+p2 <- FeatureScatter(seurat_obj, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+p1 + p2
+```
+
+Filtering step
+```{r}
+seurat_obj <- subset(seurat_obj, subset = percent.mt < max.mitocondrial.percentage)
+seurat_obj <- subset(seurat_obj, subset = nCount_RNA > min.cells)
+seurat_obj <- subset(seurat_obj, subset = nFeature_RNA > min.features)
+```
+
+
+QC metrics after filtering
+```{r}
+seurat_obj[["percent.mt"]] <- PercentageFeatureSet(seurat_obj, pattern = "^MT-")
+p1 <- VlnPlot(seurat_obj, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3) 
+p1
+```
+```{r fig.width=8, fig.height=3}
+p1 <- FeatureScatter(seurat_obj, feature1 = "nCount_RNA", feature2 = "percent.mt") + NoLegend()
+p2 <- FeatureScatter(seurat_obj, feature1 = "nCount_RNA", feature2 = "nFeature_RNA") + NoLegend()
+p1 + p2
+```
+
+## Scaling and Normalization
+```{r Normalize data}
+# Normalize data
+seurat_obj <- NormalizeData(seurat_obj, normalization.method = "LogNormalize", scale.factor = 10000)
+```
+
+### Variable feature selection {.tabset}
+
+#### Variable features with IG and TR genes 
+
+```{r variable features}
+# Find variable features
+seurat_obj <- FindVariableFeatures(seurat_obj, selection.method = "vst", nfeatures = 2000)
+
+top10 <- head(VariableFeatures(seurat_obj), 15)
+
+p1 <- VariableFeaturePlot(seurat_obj) + NoLegend()
+p2 <- LabelPoints(plot = p1, points = top10, repel = TRUE)
+p1+p2
+```
+
+#### Variable features without IG and TR genes 
+
+```{r genes to be excluded}
+features_meta <- readRDS(path_to_ig_tr_file)
+
+biotypes_excl <- unique(features_meta[["gene_biotype"]])[grepl(pattern = "^IG_|^TR_",                                                               x = unique(features_meta[["gene_biotype"]]))]
+remove_genes <- features_meta[["external_gene_name"]][features_meta[["gene_biotype"]] %in% biotypes_excl]
+
+#remove_genes # List genes to be excluded
+```
+
+Now we remove IG and TR features from highly variable features
+
+```{r variable features without ig tr}
+# Find variable features
+seurat_obj <- FindVariableFeatures(seurat_obj, selection.method = "vst", nfeatures = 2000)
+
+bool_remove_genes <- VariableFeatures(seurat_obj) %in% remove_genes
+VariableFeatures(seurat_obj) <- VariableFeatures(seurat_obj)[!bool_remove_genes]
+
+cat("After removing IG/TR genes, the total number of variable features is:", length(VariableFeatures(seurat_obj)),"\n")
+
+top10 <- head(VariableFeatures(seurat_obj), 15)
+
+p1 <- VariableFeaturePlot(seurat_obj) + NoLegend()
+p2 <- LabelPoints(plot = p1, points = top10, repel = TRUE, xnudge= 0, ynudge = 0)
+p1+p2
+```
+
+### Scaling 
+
+```{r}
+all.genes <- rownames(seurat_obj)
+seurat_obj <- ScaleData(seurat_obj, features= all.genes)
+```
+
+
+## PCA 
+
+```{r}
+seurat_obj <- RunPCA(seurat_obj, features = VariableFeatures(object = seurat_obj))
+```
+
+### Visualize dimensional loadings
+
+```{r}
+# Visualize PCA
+
+print(seurat_obj[["pca"]], dims = 1:5, nfeatures = 5)
+
+VizDimLoadings(seurat_obj, dims =1:2, reduction = "pca")
+
+DimPlot(seurat_obj, reduction = "pca", raster = F)
+```
+
+### Heatmap of PCA loadings with respect to genes
+
+```{r eval=FALSE, include=FALSE}
+DimHeatmap(seurat_obj , dims = 1, cells = 500, balanced = TRUE)
+DimHeatmap(seurat_obj, dims = 1:15, cells = 500, balanced = TRUE)
+```
+
+### Elbow Plot
+
+```{r Elbow Plot}
+ElbowPlot(seurat_obj, ndims = 60)
+```
+
+# Cell Clustering
+
+## Neighbors, Clusters
+
+```{r}
+seurat_obj <- FindNeighbors(seurat_obj, dims = 1:50)
+suppressMessages(seurat_obj <- FindClusters(seurat_obj, resolution = seq(0.1, 1, 0.1)))
+```
+## UMAP 
+
+```{r}
+seurat_obj <- RunUMAP(seurat_obj, dims = 1:50)
+```
+```{r}
+DimPlot(seurat_obj, reduction = "umap", raster = F, label = TRUE) + NoLegend()
+```
+## Doublet finder
+```{r}
+# pK identification (no ground-truth)
+sweep.list <- paramSweep(seurat_obj, PCs = 1:50)
+sweep.stats <- summarizeSweep(sweep.list)
+bcmvn <- find.pK(sweep.stats)
+```
+
+```{r}
+# Optimal pK is the max of the bomodality coefficent (BCmvn) distribution
+bcmvn.max <- bcmvn[which.max(bcmvn$BCmetric),]
+optimal.pk <- bcmvn.max$pK
+optimal.pk <- as.numeric(levels(optimal.pk))[optimal.pk]
+  
+## Homotypic doublet proportion estimate
+annotations <- seurat_obj@meta.data$seurat_clusters
+homotypic.prop <- modelHomotypic(annotations) 
+nExp.poi <- round(optimal.pk * nrow(seurat_obj@meta.data)) ## Assuming 7.5% doublet formation rate - tailor for your dataset
+nExp.poi.adj <- round(nExp.poi * (1 - homotypic.prop))
+  
+# run DoubletFinder
+seurat_obj <- doubletFinder(seu = seurat_obj, 
+                            PCs = 1:50, 
+                            pK = optimal.pk,
+                            nExp = nExp.poi.adj)
+```
+
+```{r}
+colnames(seurat_obj@meta.data)[18] <- "doublet_finder"
+```
+
+
+
+## QC check in UMAP {.tabset}
+
+### Percent Mito 
+```{r}
+FeaturePlot(seurat_obj, features = c("percent.mt"))
+```
+
+### nFeature RNA 
+```{r}
+FeaturePlot(seurat_obj, features = c("nFeature_RNA"))
+```
+
+### nCount RNA 
+```{r}
+FeaturePlot(seurat_obj, features = c("nCount_RNA"))
+```
+
+### Percent Ribo
+
+
+```{r}
+FeaturePlot(seurat_obj, features = c("percent.rb"))
+```
+
+### Doublet Finder
+```{r}
+DimPlot(seurat_obj, reduction = "umap",
+        raster = F, group.by = "doublet_finder",
+        label = T, label.box = T, repel = T) +
+  theme(legend.position = "None") + 
+  ggtitle("Doublet Finder")
+```
+
+Remove doublets
+```{r}
+seurat_obj <- subset(seurat_obj, doublet_finder == "Singlet")
+```
+
+## Picking the right resolution for clustering {.tabset}
+
+### Res 0.1
+```{r}
+DimPlot(seurat_obj, 
+        reduction="umap", raster=F,
+        group.by="RNA_snn_res.0.1",
+        label = T, label.box = T, repel=T) +
+theme(legend.position = "None") +
+ggtitle("Res 0.2")
+```
+
+### Res 0.3 
+```{r}
+DimPlot(seurat_obj, 
+        reduction="umap", raster=F,
+        group.by="RNA_snn_res.0.3",
+        label = T, label.box = T, repel=T) +
+theme(legend.position = "None") +
+ggtitle("Res 0.3")
+```
+
+
+### Res 0.5 
+```{r}
+DimPlot(seurat_obj, 
+        reduction="umap", raster=F,
+        group.by="RNA_snn_res.0.5",
+        label = T, label.box = T, repel=T) +
+theme(legend.position = "None") +
+ggtitle("Res 0.5")
+```
+
+### Res 0.7 
+```{r}
+DimPlot(seurat_obj, 
+        reduction="umap", raster=F,
+        group.by="RNA_snn_res.0.7",
+        label = T, label.box = T, repel=T) +
+theme(legend.position = "None") +
+ggtitle("Res 0.7")
+```
+
+### Res 0.9 
+```{r}
+DimPlot(seurat_obj, 
+        reduction="umap", raster=F,
+        group.by="RNA_snn_res.0.9",
+        label = T, label.box = T, repel=T) +
+theme(legend.position = "None") +
+ggtitle("Res 0.9")
+```
+
+### Res 1
+```{r}
+DimPlot(seurat_obj, 
+        reduction="umap", raster=F,
+        group.by="RNA_snn_res.1",
+        label = T, label.box = T, repel=T) +
+theme(legend.position = "None") +
+ggtitle("Res 0.9")
+```
+
+
+# Cell Annotations
+
+## SingleR
+
+
+```{r}
+sce <- as.SingleCellExperiment(DietSeurat(seurat_obj))
+sce
+```
+
+```{r}
+# Load the reference data
+hpca.se <- celldex::HumanPrimaryCellAtlasData()
+monaco.se <- celldex::MonacoImmuneData()
+blueprint.se <- celldex::BlueprintEncodeData()
+
+# Apply Single R
+hpca.main <- SingleR(test = sce, ref = hpca.se, labels = hpca.se$label.main, assay.type.test = 1)
+hpca.fine <- SingleR(test = sce, ref = hpca.se, labels = hpca.se$label.fine, assay.type.test = 1)
+
+monaco.main <- SingleR(test = sce, ref = monaco.se, labels = monaco.se$label.main, assay.type.test = 1)
+monaco.fine <- SingleR(test = sce, ref = monaco.se, labels = monaco.se$label.fine, assay.type.test = 1)
+
+blueprint.main <- SingleR(test = sce, ref = blueprint.se, labels = blueprint.se$label.main, assay.type.test = 1)
+blueprint.fine <- SingleR(test = sce, ref = blueprint.se, labels = blueprint.se$label.fine, assay.type.test = 1)
+```
+
+```{r}
+# Add cell annotations from single R in seurat object
+seurat_obj <- AddMetaData(object = seurat_obj, metadata = hpca.main$labels, col.name = "SingleR_hpca_main")
+seurat_obj <- AddMetaData(object = seurat_obj, metadata = hpca.fine$labels, col.name = "SingleR_hpca_fine")
+
+seurat_obj <- AddMetaData(object = seurat_obj, metadata = monaco.main$labels, col.name = "SingleR_monaco_main")
+seurat_obj <- AddMetaData(object = seurat_obj, metadata = monaco.fine$labels, col.name = "SingleR_monaco_fine")
+
+seurat_obj <- AddMetaData(object = seurat_obj, metadata = blueprint.main$labels, col.name = "SingleR_blueprint_main")
+seurat_obj <- AddMetaData(object = seurat_obj, metadata = blueprint.fine$labels, col.name = "SingleR_blueprint_fine")
+```
+
+```{r}
+DimPlot(seurat_obj, group.by = "SingleR_hpca_main", raster = F, label = TRUE, label.box = TRUE, repel = TRUE) + NoLegend()
+
+DimPlot(seurat_obj, group.by = "SingleR_monaco_main", raster = F, label = TRUE, label.box = TRUE, repel = TRUE) + NoLegend()
+
+DimPlot(seurat_obj, group.by = "SingleR_blueprint_main", raster = F, label = TRUE, label.box = TRUE, repel = TRUE) + NoLegend()
+```
+
+```{r}
+DimPlot(seurat_obj, group.by = "SingleR_hpca_fine", raster = F, label = TRUE, label.box = TRUE, repel = TRUE) + NoLegend()
+
+DimPlot(seurat_obj, group.by = "SingleR_monaco_fine", raster = F, label = TRUE, label.box = TRUE, repel = TRUE) + NoLegend()
+
+DimPlot(seurat_obj, group.by = "SingleR_blueprint_fine", raster = F, label = TRUE, label.box = TRUE, repel = TRUE) + NoLegend()
+```
+
+
+# Save Seurat object
+```{r}
+# Save the seurat object
+saveRDS(seurat_obj, file.path(path_to_output_directory, paste0(sample_name, "_processed_object.rds")))
+
+```
+
+# Save B Cells
+```{r}
+# Subset B cells based on SingleR label (main or fine)
+b_cells_hpca_main <- subset(seurat_obj, subset = SingleR_hpca_main == "B_cell")
+b_cells_monaco_main <- subset(seurat_obj, subset = SingleR_monaco_main == "B cells")
+b_cells_blueprint_main <- subset(seurat_obj, subset = SingleR_blueprint_main == "B-cells")
+
+# Save the subsetted Seurat object
+saveRDS(b_cells_hpca_main, file.path(path_to_output_directory, paste0(sample_name, "_Bcells_hpca_main.rds")))
+saveRDS(b_cells_monaco_main, file.path(path_to_output_directory, paste0(sample_name, "_Bcells_monaco_main.rds")))
+saveRDS(b_cells_blueprint_main, file.path(path_to_output_directory, paste0(sample_name, "_Bcells_blueprint_main.rds")))
+```
+
+
+# Clear up memory
+```{r}
+rm(list = ls())
+gc()
+```
+
