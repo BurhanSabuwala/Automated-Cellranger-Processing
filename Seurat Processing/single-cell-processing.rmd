@@ -11,14 +11,14 @@ output:
     number_sections: false
     highlight: tango
 params:
-  path_base: "~/Research/compendium"
-  data_root: "Data"
-  data_id: "SRP372296"
-  sample_id: "SRR18922759"
-  subject_id: "s01"
-  metadata_file: "metaData-Sars-CoV-2.xlsx"
-  ig_tr_file: "~/Research/pipeline/Seurat Processing/resources/QC_features_meta_human_v112.rds"
-  p10x_file: "SRR18922759/filtered_feature_bc_matrix"
+  path_base: "/mnt/data/Wang"
+  data_root: "data"
+  data_id: "F09_0"
+  sample_id: "F09_0"
+  subject_id: "F09"
+  metadata_file: "wang_processing_metadata.xlsx"
+  ig_tr_file: "/mnt/data/Wang/pipeline/Seurat Pipeline/resources/QC_features_meta_human_v112.rds"
+  p10x_file: "F09/F09_0/cell_ranger_F09_0/outs/filtered_feature_bc_matrix"
   min.features: 200
   min.cells: 5
   max.mitocondrial.percentage: 20
@@ -28,6 +28,8 @@ params:
 # Setup
 ```{r knitr, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)  # Code and results visible
+# Set the knitr root directory so setwd() inside chunks doesn't trigger a warning
+knitr::opts_knit$set(root.dir = normalizePath(params$path_base))
 ```
 
 ```{r debug-params}
@@ -72,7 +74,8 @@ print(params$path_base)
 # Set variables for files
 path_base <- params$path_base
 
-setwd(path_base)
+# Note: working directory is set via knitr::opts_knit$set(root.dir) in the setup
+# chunk above; setwd() is not used here to avoid knitr warnings.
 
 #path_data_root <- file.path(path_base, params$data_root, params$data_id)
 # Removed params$data_id due to differing file structure
@@ -100,7 +103,7 @@ max.mitocondrial.percentage = params$max.mitocondrial.percentage
 # list (and install if needed) CRAN packages
 # TODO: Add annotation packages
 # packages <- c("knitr", "dplyr", "patchwork", "Seurat", "stringr", "tidyverse", "DoubletFinder", "combineSeuratAIRR", "SingleR", "celldex") // removed "combineSeuratAIRR" in this line
-packages <- c("knitr", "dplyr", "patchwork", "Seurat", "stringr", "tidyverse", "DoubletFinder", "SingleR", "celldex", "clustree") 
+packages <- c("knitr", "dplyr", "patchwork", "Seurat", "stringr", "tidyverse", "DoubletFinder", "SingleR", "celldex", "clustree", "readxl") 
 new_pkg <- packages[!(packages %in% installed.packages())]
 if (length(new_pkg)) {install.packages(new_pkg)}
 
@@ -205,7 +208,7 @@ seurat_obj <- NormalizeData(seurat_obj, normalization.method = "LogNormalize", s
 # Find variable features
 seurat_obj <- FindVariableFeatures(seurat_obj, selection.method = "vst", nfeatures = 2000)
 
-top10 <- head(VariableFeatures(seurat_obj), 15)
+top10 <- head(VariableFeatures(seurat_obj), 20)
 
 p1 <- VariableFeaturePlot(seurat_obj) + NoLegend()
 p2 <- LabelPoints(plot = p1, points = top10, repel = TRUE)
@@ -217,7 +220,8 @@ p1+p2
 ```{r genes to be excluded}
 features_meta <- readRDS(path_to_ig_tr_file)
 
-biotypes_excl <- unique(features_meta[["gene_biotype"]])[grepl(pattern = "^IG_|^TR_",                                                               x = unique(features_meta[["gene_biotype"]]))]
+biotypes_excl <- unique(features_meta[["gene_biotype"]])[grepl(pattern = "^IG_|^TR_",                                                               
+                                                               x = unique(features_meta[["gene_biotype"]]))]
 remove_genes <- features_meta[["external_gene_name"]][features_meta[["gene_biotype"]] %in% biotypes_excl]
 
 #remove_genes # List genes to be excluded
@@ -237,7 +241,7 @@ cat("After removing IG/TR genes, the total number of variable features is:", len
 top10 <- head(VariableFeatures(seurat_obj), 15)
 
 p1 <- VariableFeaturePlot(seurat_obj) + NoLegend()
-p2 <- LabelPoints(plot = p1, points = top10, repel = TRUE, xnudge= 0, ynudge = 0)
+p2 <- LabelPoints(plot = p1, points = top10, repel = TRUE, xnudge = 0, ynudge = 0)
 p1+p2
 ```
 
@@ -293,9 +297,11 @@ suppressMessages(seurat_obj <- FindClusters(seurat_obj, resolution = seq(0.1, 1,
 ```{r}
 seurat_obj <- RunUMAP(seurat_obj, dims = 1:50)
 ```
+
 ```{r}
 DimPlot(seurat_obj, reduction = "umap", raster = F, label = TRUE) + NoLegend()
 ```
+
 ## Doublet finder
 ```{r}
 # pK identification (no ground-truth)
@@ -387,20 +393,251 @@ clustree(seurat_obj, prefix = "RNA_snn_res.") +
 
 Dot plots below use a curated set of canonical PBMC markers to aid cluster identity assignment at each resolution. X-axis gene labels are **color-coded by cell type** so groups are immediately readable.
 
-```{r pbmc-markers}
-# Canonical PBMC marker genes grouped by cell type
-pbmc_markers <- list(
-  "B cells"       = c("MS4A1", "CD79A", "CD79B", "CD19"),
-  "T cells (CD4)" = c("CD3D", "CD3E", "CD4", "IL7R"),
-  "T cells (CD8)" = c("CD8A", "CD8B", "GZMB", "PRF1"),
-  "NK cells"      = c("GNLY", "NKG7", "NCAM1", "KLRD1"),
-  "Monocytes"     = c("CD14", "LYZ", "S100A8", "S100A9", "FCGR3A"),
-  "DC"            = c("FCER1A", "CST3", "CD1C", "CLEC9A"),
-  "Plasma cells"  = c("IGHG1", "MZB1", "SDC1", "JCHAIN"),
-  "Platelets"     = c("PPBP", "PF4", "GP1BA", "ITGA2B"),
-  "pDC"           = c("LILRA4", "IL3RA", "CLEC4C")
-)
+Cell specific markers:
+ - 
 
+
+
+
+```{r pbmc-markers}
+# ─────────────────────────────────────────────────────────────────────────────
+# Canonical PBMC marker genes — curated from the literature
+#
+# B cells
+#   MS4A1 (CD20), CD79A, CD79B, CD19 — pan-B identity markers used universally
+#   across PBMC scRNA-seq studies. MS4A1/CD20 is absent on plasma cells, making
+#   it the canonical gate. Source: Seurat PBMC tutorial (Stuart et al. 2019,
+#   Cell); Hao et al. 2021, Cell (Azimuth PBMC reference).
+#
+# B naive
+#   TCL1A — the single most discriminating naive B cell marker in scRNA-seq;
+#     absent in memory, plasma cells, and ABCs. Azimuth L2 top marker.
+#     Source: Hao et al. 2021, Cell; Stewart et al. 2021, Front. Immunol.
+#   IGHD  — encodes IgD heavy chain; transcriptional equivalent of surface IgD
+#     used in flow cytometry; robustly detected in 10x 3′ data.
+#     Source: Hao et al. 2021; Glass et al. 2020, Cell Reports.
+#   IL4R  — consistently naive-enriched in Azimuth and CellTypist references;
+#     validated in the INS study defining mature naive B cells.
+#     Source: Hao et al. 2021; Sutton et al. 2021, JCI Insight.
+#   YBX3  — RNA-binding protein marking naive quiescence.
+#     Source: Hao et al. 2021 (Azimuth L2 marker); CellTypist Immune_All_Low.
+#
+# B memory
+#   COCH  — top memory-specific marker in Azimuth; essentially absent in naive
+#     and ABC clusters; highly specific to switched memory.
+#     Source: Hao et al. 2021, Cell; Stewart et al. 2021, Front. Immunol.
+#   AIM2  — enriched in classical memory vs. ABCs and naive; present in Allen
+#     Institute Immune Health Atlas and PanglaoDB memory B cell entries.
+#     Source: Hao et al. 2021; Allen Inst. Immunology Atlas (2023).
+#   TNFRSF13B (TACI) — defines the unswitched/intermediate memory gate in
+#     Azimuth ("B intermediate"); used by Glass et al. 2023 to annotate all
+#     six memory B cell clusters in tonsillar scRNA-seq.
+#     Source: Hao et al. 2021; Glass et al. 2023, JCI Insight.
+#   IGHG1 — most abundant IgG subclass transcript; unambiguous class-switched
+#     memory marker; also marks plasmablasts (interpret with MS4A1).
+#     Source: Glass et al. 2023, JCI Insight; Stewart et al. 2021.
+#
+# B ABCs (age-associated / atypical memory / DN2)
+#   ITGAX (CD11c) — the single best positive ABC marker in scRNA-seq; directly
+#     regulated by ZEB2 at the chromatin level; robustly detected in 10x data.
+#     Source: Jenks et al. 2018, Immunity; Dai et al. 2024, Science;
+#             Woodruff et al. 2020, Nature Immunology.
+#   FCRL5 — inhibitory Fc receptor-like protein defining functionally impaired
+#     atypical memory B cells across malaria, SLE, and tumor contexts.
+#     Source: Kim et al. 2015, PLOS Pathogens; Jenks et al. 2018, Immunity;
+#             Pan-cancer B cell atlas 2024, Cancer Cell.
+#   ZEB2  — master transcription factor driving ABC lineage commitment; more
+#     reliably detected than TBX21 in droplet scRNA-seq; directly represses
+#     the GC program and activates ITGAX.
+#     Source: Dai et al. 2024, Science; Jenks et al. 2018, Immunity.
+#   DUSP4 — one of the most robustly detected ABC markers in scRNA-seq; defines
+#     the "B09.DUSP4+ AtM" cluster in the pan-cancer atlas.
+#     Source: Pan-cancer B cell atlas 2024, Cancer Cell;
+#             RA DN2 B cell study 2023, Front. Immunol.
+#   NOTE: TBX21 (T-bet) is the canonical protein-level ABC marker but is
+#   notoriously poorly detected in 10x scRNA-seq (mRNA too low); intentionally
+#   excluded. Use ITGAX + ZEB2 + DUSP4 as proxy markers.
+#
+# T cells (CD4)
+#   CD3D, CD3E — pan-T cell markers; part of the TCR/CD3 signaling complex.
+#     Source: Seurat PBMC tutorial (Stuart et al. 2019); Hao et al. 2021.
+#   CD4   — lineage-defining co-receptor for MHC class II.
+#     Source: Stuart et al. 2019, Cell; Hao et al. 2021.
+#   IL7R  — IL-7 receptor alpha chain; marks naive and memory CD4+ T cells;
+#     top differentially expressed gene in CD4 naive cluster in the canonical
+#     Seurat PBMC 3k tutorial.
+#     Source: Stuart et al. 2019, Cell; Hao et al. 2021.
+#
+# T cells (CD8)
+#   CD8A, CD8B — lineage-defining co-receptors for MHC class I.
+#     Source: Stuart et al. 2019; Hao et al. 2021.
+#   GZMB  — granzyme B; cytotoxic effector molecule marking activated/effector
+#     CD8+ T cells and NK cells.
+#     Source: Hao et al. 2021; Szabo et al. 2019, Nature Communications.
+#   PRF1  — perforin; pore-forming cytotoxic effector; co-expressed with GZMB
+#     in effector CD8 T cells and NK cells.
+#     Source: Hao et al. 2021; Stuart et al. 2019 (PBMC 3k DotPlot example).
+#
+# NK cells
+#   GNLY  — granulysin; top NK cell marker in the Seurat PBMC tutorial;
+#     also expressed in cytotoxic CD8 T cells.
+#     Source: Stuart et al. 2019, Cell; Hao et al. 2021.
+#   NKG7  — natural killer cell granule protein 7; robust NK/cytotoxic marker.
+#     Source: Stuart et al. 2019; 10x Genomics Loupe Browser PBMC annotation.
+#   NCAM1 (CD56) — classical NK cell surface marker; used in 10x Genomics
+#     official PBMC annotation guide.
+#     Source: 10x Genomics Loupe Browser tutorial; Hao et al. 2021.
+#   KLRD1 (CD94) — C-type lectin NK receptor; part of the NKG2 family.
+#     Source: Hao et al. 2021 (Azimuth L2 NK marker); PanglaoDB.
+#
+# Monocytes
+#   CD14  — classical monocyte marker (CD14++ monocytes); used in every PBMC
+#     scRNA-seq annotation paper as the primary classical monocyte gate.
+#     Source: Stuart et al. 2019; Hao et al. 2021; Villani et al. 2017, Science.
+#   LYZ   — lysozyme; highly expressed in all monocyte subtypes and DCs;
+#     one of the top genes in PC1 in PBMC PCA.
+#     Source: Stuart et al. 2019 (PC1 loading); Hao et al. 2021.
+#   S100A8, S100A9 — calcium-binding alarmins; top markers of classical
+#     monocytes in PBMC scRNA-seq across dozens of studies.
+#     Source: Hao et al. 2021; Villani et al. 2017, Science.
+#   FCGR3A (CD16) — non-classical monocyte marker; used to distinguish
+#     CD14+CD16++ and CD14−CD16++ non-classical monocytes.
+#     Source: Stuart et al. 2019; Hao et al. 2021; Villani et al. 2017.
+#
+# DC (conventional dendritic cells)
+#   FCER1A — high-affinity IgE receptor alpha; top cDC2 marker in PBMC scRNA-seq;
+#     used in the canonical Seurat tutorial DotPlot.
+#     Source: Stuart et al. 2019; Villani et al. 2017, Science.
+#   CST3  — cystatin C; expressed in monocytes and DCs; used in the Seurat
+#     tutorial as a DC/monocyte shared marker.
+#     Source: Stuart et al. 2019; Hao et al. 2021.
+#   CD1C  — cDC2 lineage marker (CD1c+ DCs); distinguishes cDC2 from cDC1.
+#     Source: Villani et al. 2017, Science; Hao et al. 2021.
+#   CLEC9A — cDC1 lineage marker (CLEC9A+ / CD141+ DCs); marks cross-presenting
+#     dendritic cells.
+#     Source: Villani et al. 2017, Science; Hao et al. 2021.
+#
+# Plasma cells
+#   IGHG1 — IgG1 heavy chain; marks class-switched plasma cells and
+#     plasmablasts; highest-expressed Ig in peripheral blood plasma cells.
+#     Source: Hao et al. 2021; Glass et al. 2023, JCI Insight.
+#   MZB1  — marginal zone B and B1 cell-specific protein; top plasma cell /
+#     plasmablast marker in multiple PBMC atlases; used in the Seurat tutorial
+#     as a pDC marker (NOTE: subsequent studies clarified MZB1 as plasma cell).
+#     Source: Hao et al. 2021; Stuart et al. 2019 (noted in PC12/13).
+#   SDC1  (CD138) — syndecan-1; the canonical plasma cell surface marker used
+#     in flow cytometry; also detected at mRNA level.
+#     Source: Hao et al. 2021; Glass et al. 2023.
+#   JCHAIN — immunoglobulin joining chain; marks polymeric IgM/IgA secreting
+#     cells; one of the top plasma cell / plasmablast markers in scRNA-seq.
+#     Source: Hao et al. 2021; Stuart et al. 2019 (immune_alignment DotPlot).
+#
+# Platelets (Megakaryocytes)
+#   PPBP  — pro-platelet basic protein; top megakaryocyte/platelet marker in
+#     PBMC scRNA-seq; used in the Seurat PBMC 3k tutorial.
+#     Source: Stuart et al. 2019; Hao et al. 2021.
+#   PF4   — platelet factor 4 (CXCL4); co-expressed with PPBP in platelets.
+#     Source: Stuart et al. 2019; Hao et al. 2021.
+#   GP1BA (CD42b) — GPIb alpha; platelet glycoprotein involved in vWF binding.
+#     Source: Hao et al. 2021 (Azimuth platelet markers); PanglaoDB.
+#   ITGA2B (CD41) — integrin alpha-IIb; platelet-specific integrin.
+#     Source: Hao et al. 2021; PanglaoDB megakaryocyte markers.
+#
+# pDC (plasmacytoid dendritic cells)
+#   LILRA4 — leukocyte immunoglobulin-like receptor A4; top pDC marker in
+#     PBMC scRNA-seq; used in Azimuth L2 pDC annotation.
+#     Source: Hao et al. 2021; Villani et al. 2017, Science.
+#   IL3RA  (CD123) — IL-3 receptor alpha; classical pDC surface marker.
+#     Source: Villani et al. 2017, Science; Hao et al. 2021.
+#   CLEC4C (CD303/BDCA-2) — C-type lectin receptor; highly specific to pDCs;
+#     used as the defining pDC marker across flow cytometry and scRNA-seq.
+#     Source: Villani et al. 2017, Science; Hao et al. 2021.
+# ─────────────────────────────────────────────────────────────────────────────
+
+pbmc_markers <- list(
+  # ── Pan-B identity ──────────────────────────────────────────────────────────
+  # Stuart et al. 2019 (Cell); Hao et al. 2021 (Cell / Azimuth PBMC reference)
+  "B cells"           = c("MS4A1", "CD79A", "CD79B", "CD19"),
+
+  # ── Naive B cells ───────────────────────────────────────────────────────────
+  # TCL1A: Hao et al. 2021; Stewart et al. 2021, Front. Immunol.
+  # IGHD:  Glass et al. 2020, Cell Reports; Hao et al. 2021
+  # IL4R:  Hao et al. 2021; Sutton et al. 2021, JCI Insight
+  # YBX3:  Hao et al. 2021; CellTypist Immune_All_Low model
+  "B naive"           = c("TCL1A", "IGHD", "IL4R", "YBX3"),
+
+  # ── Memory B cells ──────────────────────────────────────────────────────────
+  # COCH:       Hao et al. 2021; Stewart et al. 2021, Front. Immunol.
+  # AIM2:       Hao et al. 2021; Allen Institute Immune Health Atlas 2023
+  # TNFRSF13B:  Hao et al. 2021 ("B intermediate"); Glass et al. 2023, JCI Insight
+  # IGHG1:      Glass et al. 2023, JCI Insight; Stewart et al. 2021
+  "B memory"          = c("COCH", "AIM2", "TNFRSF13B", "IGHG1"),
+
+  # ── Age-associated B cells (ABCs / DN2 / atypical memory) ───────────────────
+  # ITGAX:  Jenks et al. 2018, Immunity; Dai et al. 2024, Science
+  # FCRL5:  Kim et al. 2015, PLOS Pathogens; Jenks et al. 2018, Immunity
+  # ZEB2:   Dai et al. 2024, Science (master TF of ABC lineage)
+  # DUSP4:  Pan-cancer B cell atlas 2024, Cancer Cell; RA DN2 study 2023, Front. Immunol.
+  # NOTE: TBX21 excluded — poorly detected in 10x scRNA-seq despite being the
+  #       canonical protein-level ABC marker (see Cancer Cell 2024 for caveats)
+  "B ABCs"            = c("ITGAX", "FCRL5", "ZEB2", "DUSP4"),
+
+  # ── CD4+ T cells ────────────────────────────────────────────────────────────
+  # CD3D, CD3E: Stuart et al. 2019 (Cell); Hao et al. 2021
+  # CD4:        Stuart et al. 2019; Hao et al. 2021
+  # IL7R:       Stuart et al. 2019 (top CD4 naive marker, PBMC 3k tutorial)
+  "T cells (CD4)"     = c("CD3D", "CD3E", "CD4", "IL7R"),
+
+  # ── CD8+ T cells ────────────────────────────────────────────────────────────
+  # CD8A, CD8B: Stuart et al. 2019; Hao et al. 2021
+  # GZMB:       Hao et al. 2021; Szabo et al. 2019, Nature Communications
+  # PRF1:       Hao et al. 2021; Stuart et al. 2019 (PBMC 3k DotPlot)
+  "T cells (CD8)"     = c("CD8A", "CD8B", "GZMB", "PRF1"),
+
+  # ── NK cells ────────────────────────────────────────────────────────────────
+  # GNLY:   Stuart et al. 2019; Hao et al. 2021
+  # NKG7:   Stuart et al. 2019; 10x Genomics Loupe Browser PBMC annotation guide
+  # NCAM1:  10x Genomics Loupe Browser PBMC guide; Hao et al. 2021
+  # KLRD1:  Hao et al. 2021 (Azimuth L2 NK marker)
+  "NK cells"          = c("GNLY", "NKG7", "NCAM1", "KLRD1"),
+
+  # ── Monocytes ───────────────────────────────────────────────────────────────
+  # CD14:    Stuart et al. 2019; Villani et al. 2017, Science
+  # LYZ:     Stuart et al. 2019 (top PC1 loading); Hao et al. 2021
+  # S100A8, S100A9: Hao et al. 2021; Villani et al. 2017, Science
+  # FCGR3A:  Stuart et al. 2019 (CD16 non-classical gate); Hao et al. 2021
+  "Monocytes"         = c("CD14", "LYZ", "S100A8", "S100A9", "FCGR3A"),
+
+  # ── Conventional DCs ────────────────────────────────────────────────────────
+  # FCER1A:  Stuart et al. 2019 (canonical DC marker in PBMC 3k DotPlot)
+  # CST3:    Stuart et al. 2019; Hao et al. 2021
+  # CD1C:    Villani et al. 2017, Science (cDC2 lineage marker)
+  # CLEC9A:  Villani et al. 2017, Science (cDC1 / CLEC9A+ DC lineage marker)
+  "DC"                = c("FCER1A", "CST3", "CD1C", "CLEC9A"),
+
+  # ── Plasma cells ────────────────────────────────────────────────────────────
+  # IGHG1:  Hao et al. 2021; Glass et al. 2023, JCI Insight
+  # MZB1:   Hao et al. 2021; Stuart et al. 2019 (noted as plasma/pDC marker)
+  # SDC1:   Hao et al. 2021; Glass et al. 2023 (CD138, canonical plasma cell)
+  # JCHAIN: Hao et al. 2021; Stuart et al. 2019 (immune_alignment DotPlot)
+  "Plasma cells"      = c("IGHG1", "MZB1", "SDC1", "JCHAIN"),
+
+  # ── Platelets / Megakaryocytes ───────────────────────────────────────────────
+  # PPBP:   Stuart et al. 2019 (top platelet marker, PBMC 3k tutorial)
+  # PF4:    Stuart et al. 2019; Hao et al. 2021
+  # GP1BA:  Hao et al. 2021 (Azimuth platelet markers); PanglaoDB
+  # ITGA2B: Hao et al. 2021; PanglaoDB megakaryocyte markers
+  "Platelets"         = c("PPBP", "PF4", "GP1BA", "ITGA2B"),
+
+  # ── Plasmacytoid DCs ────────────────────────────────────────────────────────
+  # LILRA4:  Hao et al. 2021; Villani et al. 2017, Science
+  # IL3RA:   Villani et al. 2017, Science (CD123, classical pDC gate)
+  # CLEC4C:  Villani et al. 2017, Science (CD303/BDCA-2; highly pDC-specific)
+  "pDC"               = c("LILRA4", "IL3RA", "CLEC4C")
+)
+```
+
+```{r pbmc-marker-code}
 # Flatten preserving group order
 marker_genes_flat <- unique(unlist(pbmc_markers))
 
@@ -410,6 +647,9 @@ marker_genes_flat <- marker_genes_flat[marker_genes_flat %in% rownames(seurat_ob
 # ── Color palette: one distinct color per cell type ──────────────────────────
 celltype_colors <- c(
   "B cells"       = "#2171B5",
+  "B naive"       = "#6BAED6",
+  "B memory"    = "#4292C6",
+  "B atypical (ABCs)" = "#08519C",
   "T cells (CD4)" = "#238B45",
   "T cells (CD8)" = "#74C476",
   "NK cells"      = "#FD8D3C",
@@ -438,20 +678,40 @@ gene_colors <- gene_colors[marker_genes_flat]
 
 make_dotplot <- function(res_col, res_label) {
   Idents(seurat_obj) <- res_col
+
+  # Compute group sizes, divider positions, and label midpoints
+  group_sizes       <- sapply(pbmc_markers, function(genes) sum(genes %in% rownames(seurat_obj)))
+  divider_positions <- cumsum(group_sizes)[-length(group_sizes)] + 0.5
+  label_positions   <- cumsum(group_sizes) - group_sizes / 2  # midpoint of each group
+  
+  # Get the number of clusters to calculate y offset
+  n_clusters <- length(unique(Idents(seurat_obj)))
+
   p <- DotPlot(seurat_obj, features = marker_genes_flat, dot.scale = 5) +
+    geom_vline(xintercept = divider_positions,
+               linetype = "dashed", color = "grey50", linewidth = 0.4) +
+    # Cell type labels below the gene names — placed just below the plot panel
+    annotate("text",
+             x     = label_positions,
+             y     = Inf,
+             label = names(group_sizes),
+             color = "black",
+             size  = 2.5,
+             fontface = "bold",
+             hjust = 0.5,
+             vjust = 1) +
     RotatedAxis() +
     scale_color_gradient2(
       low = "steelblue", mid = "white", high = "firebrick", midpoint = 0
     ) +
     ggtitle(paste("Canonical PBMC markers –", res_label)) +
     theme(
-      axis.text.x = element_text(
-        size = 7, face = "bold",
-        color = gene_colors[marker_genes_flat]   # color each label by cell type
-      )
+      axis.text.x  = element_text(size = 7, face = "bold",
+                                  color = gene_colors[marker_genes_flat]),
+      plot.margin  = margin(t = 5, r = 5, b = 40, l = 5)  # extra bottom margin for labels
     )
 
-  # Build a small color-legend for the cell-type groups using a dummy ggplot
+  # Color legend
   legend_df <- data.frame(
     CellType = factor(names(celltype_colors), levels = names(celltype_colors)),
     x = 1, y = seq_along(celltype_colors)
@@ -461,14 +721,13 @@ make_dotplot <- function(res_col, res_label) {
     scale_color_manual(values = celltype_colors, name = "Cell type") +
     theme_void() +
     theme(
-      legend.title      = element_text(size = 8, face = "bold"),
-      legend.text       = element_text(size = 7),
-      legend.key.size   = unit(0.5, "cm"),
-      legend.position   = "right"
+      legend.title    = element_text(size = 8, face = "bold"),
+      legend.text     = element_text(size = 7),
+      legend.key.size = unit(0.5, "cm"),
+      legend.position = "right"
     )
   legend_grob <- cowplot::get_legend(legend_plot)
 
-  # Combine dot plot + color legend side by side
   cowplot::plot_grid(p, legend_grob, ncol = 2, rel_widths = c(1, 0.15))
 }
 
@@ -484,7 +743,7 @@ library(cowplot)
 DimPlot(seurat_obj, 
         reduction="umap", raster=F,
         group.by="RNA_snn_res.0.1",
-        label = T, label.box = T, repel=T) +
+        label = T, label.box = T, repel = T) +
 theme(legend.position = "None") +
 ggtitle("Res 0.1")
 ```
@@ -498,7 +757,7 @@ make_dotplot("RNA_snn_res.0.1", "Res 0.1")
 DimPlot(seurat_obj, 
         reduction="umap", raster=F,
         group.by="RNA_snn_res.0.3",
-        label = T, label.box = T, repel=T) +
+        label = T, label.box = T, repel = T) +
 theme(legend.position = "None") +
 ggtitle("Res 0.3")
 ```
@@ -512,7 +771,7 @@ make_dotplot("RNA_snn_res.0.3", "Res 0.3")
 DimPlot(seurat_obj, 
         reduction="umap", raster=F,
         group.by="RNA_snn_res.0.5",
-        label = T, label.box = T, repel=T) +
+        label = T, label.box = T, repel = T) +
 theme(legend.position = "None") +
 ggtitle("Res 0.5")
 ```
@@ -526,7 +785,7 @@ make_dotplot("RNA_snn_res.0.5", "Res 0.5")
 DimPlot(seurat_obj, 
         reduction="umap", raster=F,
         group.by="RNA_snn_res.0.7",
-        label = T, label.box = T, repel=T) +
+        label = T, label.box = T, repel = T) +
 theme(legend.position = "None") +
 ggtitle("Res 0.7")
 ```
@@ -540,7 +799,7 @@ make_dotplot("RNA_snn_res.0.7", "Res 0.7")
 DimPlot(seurat_obj, 
         reduction="umap", raster=F,
         group.by="RNA_snn_res.0.9",
-        label = T, label.box = T, repel=T) +
+        label = T, label.box = T, repel = T) +
 theme(legend.position = "None") +
 ggtitle("Res 0.9")
 ```
@@ -554,7 +813,7 @@ make_dotplot("RNA_snn_res.0.9", "Res 0.9")
 DimPlot(seurat_obj, 
         reduction="umap", raster=F,
         group.by="RNA_snn_res.1",
-        label = T, label.box = T, repel=T) +
+        label = T, label.box = T, repel = T) +
 theme(legend.position = "None") +
 ggtitle("Res 1.0")
 ```
@@ -628,41 +887,57 @@ DimPlot(seurat_obj, group.by = "SingleR_blueprint_fine", raster = F, label = TRU
 CellTypist is a Python-based tool for automated cell type classification. We interface with it via the `reticulate` package.
 
 ```{r celltypist-setup}
-# Install reticulate if needed
 if (!requireNamespace("reticulate", quietly = TRUE)) install.packages("reticulate")
 library(reticulate)
 
-# Install celltypist into the active Python environment if absent
-tryCatch({
-  reticulate::py_install("celltypist", pip = TRUE)
-}, error = function(e) {
-  message("celltypist install skipped (may already be present): ", e$message)
-})
+# celltypist and anndata are pre-installed in the system Python via:
+#   python3 -m pip install celltypist anndata --break-system-packages
+# Point reticulate at that Python explicitly.
+reticulate::use_python(Sys.which("python3"), required = TRUE)
 
 celltypist   <- reticulate::import("celltypist")
 anndata      <- reticulate::import("anndata")
 scipy_sparse <- reticulate::import("scipy.sparse")
+
+cat("CellTypist", reticulate::py_to_r(celltypist$`__version__`), "ready.\n")
 ```
 
 ```{r celltypist-export}
 # Export log-normalised counts to an AnnData object (cells × genes)
-counts_matrix <- GetAssayData(seurat_obj, assay = "RNA", slot = "data")
+counts_matrix <- GetAssayData(seurat_obj, assay = "RNA", layer = "data")
+x          <- as.numeric(counts_matrix@x)
+i_idx      <- as.integer(counts_matrix@i)
+p_idx      <- as.integer(counts_matrix@p)
+nrows      <- nrow(counts_matrix)   # genes
+ncols      <- ncol(counts_matrix)   # cells
+cell_names <- colnames(seurat_obj)
+gene_names <- rownames(seurat_obj)
 
-counts_csr <- scipy_sparse$csr_matrix(
-  list(
-    data    = counts_matrix@x,
-    indices = counts_matrix@i,
-    indptr  = counts_matrix@p
-  ),
-  shape = c(nrow(counts_matrix), ncol(counts_matrix))
-)
+reticulate::py_run_string("
+import scipy.sparse as sp
+import numpy as np
+import anndata as ad
+import pandas as pd
 
-adata <- anndata$AnnData(
-  X   = counts_csr$T$tocsr(),
-  obs = reticulate::r_to_py(data.frame(row.names = colnames(seurat_obj))),
-  var = reticulate::r_to_py(data.frame(row.names = rownames(seurat_obj)))
+# Build genes x cells CSC (matches dgCMatrix storage), then convert to CSR
+mat = sp.csc_matrix(
+    (np.array(r.x,     dtype=np.float32),
+     np.array(r.i_idx, dtype=np.int32),
+     np.array(r.p_idx, dtype=np.int32)),
+    shape=(int(r.nrows), int(r.ncols))   # genes x cells
+).T.tocsr()                               # -> cells x genes
+
+print(f'Matrix shape: {mat.shape}')      # should be cells x genes
+
+adata = ad.AnnData(
+    X   = mat,
+    obs = pd.DataFrame(index=list(r.cell_names)),
+    var = pd.DataFrame(index=list(r.gene_names))
 )
-cat("AnnData object:", adata$n_obs, "cells ×", adata$n_vars, "genes\n")
+print(f'AnnData: {adata.n_obs} cells x {adata.n_vars} genes')
+")
+
+adata <- reticulate::py$adata
 ```
 
 ```{r celltypist-predict}
