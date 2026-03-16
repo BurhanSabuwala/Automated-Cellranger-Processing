@@ -103,7 +103,7 @@ max.mitocondrial.percentage = params$max.mitocondrial.percentage
 # list (and install if needed) CRAN packages
 # TODO: Add annotation packages
 # packages <- c("knitr", "dplyr", "patchwork", "Seurat", "stringr", "tidyverse", "DoubletFinder", "combineSeuratAIRR", "SingleR", "celldex") // removed "combineSeuratAIRR" in this line
-packages <- c("knitr", "dplyr", "patchwork", "Seurat", "stringr", "tidyverse", "DoubletFinder", "SingleR", "celldex", "clustree", "readxl") 
+packages <- c("knitr", "dplyr", "patchwork", "Seurat", "stringr", "tidyverse", "DoubletFinder", "SingleR", "celldex", "clustree", "readxl", "cowplot", "qs2", "reticulate") 
 new_pkg <- packages[!(packages %in% installed.packages())]
 if (length(new_pkg)) {install.packages(new_pkg)}
 
@@ -376,11 +376,7 @@ DimPlot(seurat_obj, reduction = "umap",
 
 Clustree visualises how cells move between clusters as resolution increases, helping identify a stable, biologically meaningful resolution.
 
-```{r clustree, fig.width=10, fig.height=12, message=FALSE, warning=FALSE}
-if (!requireNamespace("clustree", quietly = TRUE)) {
-  install.packages("clustree")
-}
-library(clustree)
+```{r clustree, fig.height=12, fig.width=10}
 
 clustree(seurat_obj, prefix = "RNA_snn_res.") +
   theme(legend.position = "right") +
@@ -620,7 +616,7 @@ pbmc_markers <- list(
   # MZB1:   Hao et al. 2021; Stuart et al. 2019 (noted as plasma/pDC marker)
   # SDC1:   Hao et al. 2021; Glass et al. 2023 (CD138, canonical plasma cell)
   # JCHAIN: Hao et al. 2021; Stuart et al. 2019 (immune_alignment DotPlot)
-  "Plasma cells"      = c("IGHG1", "MZB1", "SDC1", "JCHAIN"),
+  "Plasma cells"      = c("XBP1", "MZB1", "SDC1", "JCHAIN"),
 
   # ── Platelets / Megakaryocytes ───────────────────────────────────────────────
   # PPBP:   Stuart et al. 2019 (top platelet marker, PBMC 3k tutorial)
@@ -637,6 +633,8 @@ pbmc_markers <- list(
 )
 ```
 
+
+
 ```{r pbmc-marker-code}
 # Flatten preserving group order
 marker_genes_flat <- unique(unlist(pbmc_markers))
@@ -649,7 +647,7 @@ celltype_colors <- c(
   "B cells"       = "#2171B5",
   "B naive"       = "#6BAED6",
   "B memory"    = "#4292C6",
-  "B atypical (ABCs)" = "#08519C",
+  "B ABCs" = "#08519C",
   "T cells (CD4)" = "#238B45",
   "T cells (CD8)" = "#74C476",
   "NK cells"      = "#FD8D3C",
@@ -679,39 +677,42 @@ gene_colors <- gene_colors[marker_genes_flat]
 make_dotplot <- function(res_col, res_label) {
   Idents(seurat_obj) <- res_col
 
-  # Compute group sizes, divider positions, and label midpoints
-  group_sizes       <- sapply(pbmc_markers, function(genes) sum(genes %in% rownames(seurat_obj)))
-  divider_positions <- cumsum(group_sizes)[-length(group_sizes)] + 0.5
-  label_positions   <- cumsum(group_sizes) - group_sizes / 2  # midpoint of each group
-  
-  # Get the number of clusters to calculate y offset
+  # Recompute group sizes AFTER filtering to genes actually present in the object
+  # This ensures dividers and labels align with what DotPlot renders
+  group_sizes_present <- sapply(pbmc_markers, function(genes) {
+    sum(genes %in% marker_genes_flat)  # marker_genes_flat is already filtered
+  })
+  # Drop groups with zero genes (absent entirely from this object)
+  group_sizes_present <- group_sizes_present[group_sizes_present > 0]
+
+  divider_positions <- cumsum(group_sizes_present[-length(group_sizes_present)]) + 0.5
+  label_positions   <- cumsum(group_sizes_present) - group_sizes_present / 2
+
   n_clusters <- length(unique(Idents(seurat_obj)))
 
   p <- DotPlot(seurat_obj, features = marker_genes_flat, dot.scale = 5) +
     geom_vline(xintercept = divider_positions,
                linetype = "dashed", color = "grey50", linewidth = 0.4) +
-    # Cell type labels below the gene names — placed just below the plot panel
     annotate("text",
-             x     = label_positions,
-             y     = Inf,
-             label = names(group_sizes),
-             color = "black",
-             size  = 2.5,
+             x        = label_positions,
+             y        = Inf,
+             label    = names(group_sizes_present),
+             color    = "black",
+             size     = 2.5,
              fontface = "bold",
-             hjust = 0.5,
-             vjust = 1) +
+             hjust    = 0.5,
+             vjust    = 1) +
     RotatedAxis() +
     scale_color_gradient2(
       low = "steelblue", mid = "white", high = "firebrick", midpoint = 0
     ) +
     ggtitle(paste("Canonical PBMC markers –", res_label)) +
     theme(
-      axis.text.x  = element_text(size = 7, face = "bold",
-                                  color = gene_colors[marker_genes_flat]),
-      plot.margin  = margin(t = 5, r = 5, b = 40, l = 5)  # extra bottom margin for labels
+      axis.text.x = element_text(size = 7, face = "bold",
+                                 color = gene_colors[marker_genes_flat]),
+      plot.margin = margin(t = 5, r = 5, b = 40, l = 5)
     )
 
-  # Color legend
   legend_df <- data.frame(
     CellType = factor(names(celltype_colors), levels = names(celltype_colors)),
     x = 1, y = seq_along(celltype_colors)
@@ -727,13 +728,9 @@ make_dotplot <- function(res_col, res_label) {
       legend.position = "right"
     )
   legend_grob <- cowplot::get_legend(legend_plot)
-
   cowplot::plot_grid(p, legend_grob, ncol = 2, rel_widths = c(1, 0.15))
 }
 
-# cowplot is typically available via Seurat; install if missing
-if (!requireNamespace("cowplot", quietly = TRUE)) install.packages("cowplot")
-library(cowplot)
 ```
 
 ### Resolution UMAPs & Dot Plots {.tabset}
@@ -827,6 +824,7 @@ Remove doublets
 seurat_obj <- subset(seurat_obj, doublet_finder == "Singlet")
 ```
 
+
 # Cell Annotations
 
 ## SingleR
@@ -887,8 +885,6 @@ DimPlot(seurat_obj, group.by = "SingleR_blueprint_fine", raster = F, label = TRU
 CellTypist is a Python-based tool for automated cell type classification. We interface with it via the `reticulate` package.
 
 ```{r celltypist-setup}
-if (!requireNamespace("reticulate", quietly = TRUE)) install.packages("reticulate")
-library(reticulate)
 
 # celltypist and anndata are pre-installed in the system Python via:
 #   python3 -m pip install celltypist anndata --break-system-packages
@@ -997,6 +993,134 @@ knitr::kable(ct_freq, row.names = FALSE,
 ```
 
 
+## Azimuth
+
+Azimuth maps cells onto the Hao et al. 2021 multimodal PBMC reference (161k cells, 228 proteins), providing L1, L2, and L3 labels with prediction confidence scores. This is the gold-standard reference-based annotation for PBMC data.
+
+```{r azimuth-setup}
+if (!requireNamespace("Azimuth", quietly = TRUE)) {
+  remotes::install_github("satijalab/azimuth", ref = "master")
+}
+library(Azimuth)
+```
+
+```{r azimuth-run}
+# RunAzimuth maps query cells onto the reference UMAP and transfers labels
+seurat_obj <- RunAzimuth(seurat_obj, reference = "pbmcref")
+
+# Azimuth adds: predicted.celltype.l1, predicted.celltype.l2, predicted.celltype.l3
+# and corresponding .score columns for prediction confidence
+cat("Azimuth annotation complete.\n")
+cat("\nL1 label frequencies:\n")
+print(table(seurat_obj$predicted.celltype.l1))
+cat("\nL2 label frequencies:\n")
+print(table(seurat_obj$predicted.celltype.l2))
+```
+
+```{r azimuth-umap, fig.width=14, fig.height=5}
+p_az1 <- DimPlot(seurat_obj,
+                 group.by  = "predicted.celltype.l1",
+                 reduction = "umap", raster = FALSE,
+                 label = TRUE, label.box = TRUE, repel = TRUE,
+                 label.size = 3) +
+  NoLegend() + ggtitle("Azimuth – L1 labels")
+
+p_az2 <- DimPlot(seurat_obj,
+                 group.by  = "predicted.celltype.l2",
+                 reduction = "umap", raster = FALSE,
+                 label = TRUE, label.box = TRUE, repel = TRUE,
+                 label.size = 3) +
+  NoLegend() + ggtitle("Azimuth – L2 labels")
+
+p_az1 + p_az2
+```
+
+```{r azimuth-score-qc}
+# Visualise prediction confidence — low-score cells are unreliably annotated
+VlnPlot(seurat_obj,
+        features = "predicted.celltype.l1.score",
+        group.by = "predicted.celltype.l1",
+        pt.size  = 0) +
+  RotatedAxis() +
+  ggtitle("Azimuth L1 prediction confidence scores") +
+  NoLegend()
+```
+
+## scType
+
+scType is a fully marker-based classifier that uses our curated `pbmc_markers` gene sets directly — no external reference is needed. It scores each cluster by the scaled expression of positive markers, making the annotation directly consistent with the dot plots.
+
+```{r sctype-setup}
+if (!requireNamespace("HGNChelper", quietly = TRUE)) install.packages("HGNChelper")
+library(HGNChelper)
+
+# Load scType functions directly from GitHub (no package install needed)
+source("https://raw.githubusercontent.com/IanevskiAleksandr/sc-type/master/R/gene_sets_prepare.R")
+source("https://raw.githubusercontent.com/IanevskiAleksandr/sc-type/master/R/sctype_score_.R")
+```
+
+```{r sctype-run}
+# Build the scType marker input from our curated pbmc_markers list.
+# scType expects a data frame with columns: tissueType, cellName, geneSymbolmore1
+# (positive markers). We convert our list directly.
+sctype_markers <- data.frame(
+  tissueType    = "Immune system",
+  cellName      = rep(names(pbmc_markers), sapply(pbmc_markers, length)),
+  geneSymbolmore1 = unlist(pbmc_markers),
+  geneSymbolmore2 = "",   # negative markers — none defined here
+  stringsAsFactors = FALSE
+)
+
+# Scale the full gene matrix (needed for scType scoring)
+seurat_obj <- ScaleData(seurat_obj, features = rownames(seurat_obj), verbose = FALSE)
+
+# Score every cell
+es_max <- sctype_score(
+  scRNAseqData = LayerData(seurat_obj, assay = "RNA", layer = "scale.data"),
+  scaled       = TRUE,
+  gs           = setNames(
+    lapply(names(pbmc_markers), function(ct) pbmc_markers[[ct]]),
+    names(pbmc_markers)
+  ),
+  gs2          = NULL   # no negative markers
+)
+
+# Assign the top-scoring cell type per cluster (using seurat_clusters)
+sctype_results <- do.call(rbind, lapply(unique(seurat_obj$seurat_clusters), function(cl) {
+  cl_cells  <- which(seurat_obj$seurat_clusters == cl)
+  cl_scores <- sort(rowSums(es_max[, cl_cells, drop = FALSE]), decreasing = TRUE)
+  data.frame(
+    cluster       = cl,
+    scType_label  = names(cl_scores)[1],
+    scType_score1 = cl_scores[1],
+    scType_score2 = cl_scores[2],
+    # ratio of top score to runner-up — high ratio = confident call
+    scType_ratio  = cl_scores[1] / max(cl_scores[2], 1),
+    stringsAsFactors = FALSE
+  )
+}))
+
+sctype_results <- sctype_results[order(as.numeric(as.character(sctype_results$cluster))), ]
+print(sctype_results)
+
+# Map cluster-level labels back to individual cells
+cluster_label_map <- setNames(sctype_results$scType_label,
+                               as.character(sctype_results$cluster))
+labels <- cluster_label_map[as.character(seurat_obj$seurat_clusters)]
+names(labels) <- colnames(seurat_obj)
+seurat_obj <- AddMetaData(seurat_obj, metadata = labels, col.name = "scType_label")
+```
+
+```{r sctype-umap}
+DimPlot(seurat_obj,
+        group.by  = "scType_label",
+        reduction = "umap", raster = FALSE,
+        label = TRUE, label.box = TRUE, repel = TRUE, label.size = 3) +
+  NoLegend() +
+  ggtitle("scType – marker-based cluster annotation")
+```
+
+
 # Cell Count Summary
 
 ```{r cell-count-summary}
@@ -1012,7 +1136,7 @@ cat("============================================\n")
 cat(sprintf("Cells from CellRanger output : %d\n", n_cells_cellranger))
 cat(sprintf("Cells after QC & processing  : %d\n", n_cells_processed))
 cat(sprintf("Cells removed                : %d (%.1f%%)\n",
-            n_cells_cellranger - n_cells_processed,
+            n_cells_cellranger - n_cells_processed,ee
             (n_cells_cellranger - n_cells_processed) / n_cells_cellranger * 100))
 cat("============================================\n")
 ```
@@ -1024,7 +1148,9 @@ saveRDS(seurat_obj, file.path(path_to_output_directory, paste0(sample_name, "_pr
 
 ```
 
-# Save B Cells
+# Subset B cells
+
+
 ```{r}
 # Subset B cells based on SingleR label (main or fine)
 b_cells_hpca_main <- subset(seurat_obj, subset = SingleR_hpca_main == "B_cell")
