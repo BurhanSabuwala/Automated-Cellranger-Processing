@@ -100,7 +100,7 @@ max.mitocondrial.percentage = params$max.mitocondrial.percentage
 # list (and install if needed) CRAN packages
 # TODO: Add annotation packages
 # packages <- c("knitr", "dplyr", "patchwork", "Seurat", "stringr", "tidyverse", "DoubletFinder", "combineSeuratAIRR", "SingleR", "celldex") // removed "combineSeuratAIRR" in this line
-packages <- c("knitr", "dplyr", "patchwork", "Seurat", "stringr", "tidyverse", "DoubletFinder", "SingleR", "celldex") 
+packages <- c("knitr", "dplyr", "patchwork", "Seurat", "stringr", "tidyverse", "DoubletFinder", "SingleR", "celldex", "clustree") 
 new_pkg <- packages[!(packages %in% installed.packages())]
 if (length(new_pkg)) {install.packages(new_pkg)}
 
@@ -362,25 +362,139 @@ DimPlot(seurat_obj, reduction = "umap",
   ggtitle("Doublet Finder")
 ```
 
-Remove doublets
-```{r}
-seurat_obj <- subset(seurat_obj, doublet_finder == "Singlet")
+## Picking the right resolution for clustering
+
+> **Note:** Clustree and dot plots are intentionally run **before** doublet removal so resolution choices are evaluated on the full, unfiltered cell population.
+
+### Clustree – resolution stability overview
+
+Clustree visualises how cells move between clusters as resolution increases, helping identify a stable, biologically meaningful resolution.
+
+```{r clustree, fig.width=10, fig.height=12, message=FALSE, warning=FALSE}
+if (!requireNamespace("clustree", quietly = TRUE)) {
+  install.packages("clustree")
+}
+library(clustree)
+
+clustree(seurat_obj, prefix = "RNA_snn_res.") +
+  theme(legend.position = "right") +
+  ggtitle("Clustree – cluster stability across resolutions")
 ```
 
-## Picking the right resolution for clustering {.tabset}
+---
 
-### Res 0.1
-```{r}
+### PBMC marker gene panel
+
+Dot plots below use a curated set of canonical PBMC markers to aid cluster identity assignment at each resolution. X-axis gene labels are **color-coded by cell type** so groups are immediately readable.
+
+```{r pbmc-markers}
+# Canonical PBMC marker genes grouped by cell type
+pbmc_markers <- list(
+  "B cells"       = c("MS4A1", "CD79A", "CD79B", "CD19"),
+  "T cells (CD4)" = c("CD3D", "CD3E", "CD4", "IL7R"),
+  "T cells (CD8)" = c("CD8A", "CD8B", "GZMB", "PRF1"),
+  "NK cells"      = c("GNLY", "NKG7", "NCAM1", "KLRD1"),
+  "Monocytes"     = c("CD14", "LYZ", "S100A8", "S100A9", "FCGR3A"),
+  "DC"            = c("FCER1A", "CST3", "CD1C", "CLEC9A"),
+  "Plasma cells"  = c("IGHG1", "MZB1", "SDC1", "JCHAIN"),
+  "Platelets"     = c("PPBP", "PF4", "GP1BA", "ITGA2B"),
+  "pDC"           = c("LILRA4", "IL3RA", "CLEC4C")
+)
+
+# Flatten preserving group order
+marker_genes_flat <- unique(unlist(pbmc_markers))
+
+# Keep only genes present in the Seurat object
+marker_genes_flat <- marker_genes_flat[marker_genes_flat %in% rownames(seurat_obj)]
+
+# ── Color palette: one distinct color per cell type ──────────────────────────
+celltype_colors <- c(
+  "B cells"       = "#2171B5",
+  "T cells (CD4)" = "#238B45",
+  "T cells (CD8)" = "#74C476",
+  "NK cells"      = "#FD8D3C",
+  "Monocytes"     = "#E31A1C",
+  "DC"            = "#984EA3",
+  "Plasma cells"  = "#A65628",
+  "Platelets"     = "#F781BF",
+  "pDC"           = "#999999"
+)
+
+# Build a named vector: gene → cell-type color (only for genes present)
+gene_colors <- setNames(
+  unlist(mapply(function(genes, ct) {
+    present <- genes[genes %in% rownames(seurat_obj)]
+    rep(celltype_colors[ct], length(present))
+  }, pbmc_markers, names(pbmc_markers))),
+  unlist(mapply(function(genes, ct) {
+    genes[genes %in% rownames(seurat_obj)]
+  }, pbmc_markers, names(pbmc_markers)))
+)
+# Align to the final flat gene order used by DotPlot
+gene_colors <- gene_colors[marker_genes_flat]
+
+# NOTE: colored x-axis labels are applied directly via `color = gene_colors`
+# in element_text(). A matching discrete legend is drawn via cowplot below.
+
+make_dotplot <- function(res_col, res_label) {
+  Idents(seurat_obj) <- res_col
+  p <- DotPlot(seurat_obj, features = marker_genes_flat, dot.scale = 5) +
+    RotatedAxis() +
+    scale_color_gradient2(
+      low = "steelblue", mid = "white", high = "firebrick", midpoint = 0
+    ) +
+    ggtitle(paste("Canonical PBMC markers –", res_label)) +
+    theme(
+      axis.text.x = element_text(
+        size = 7, face = "bold",
+        color = gene_colors[marker_genes_flat]   # color each label by cell type
+      )
+    )
+
+  # Build a small color-legend for the cell-type groups using a dummy ggplot
+  legend_df <- data.frame(
+    CellType = factor(names(celltype_colors), levels = names(celltype_colors)),
+    x = 1, y = seq_along(celltype_colors)
+  )
+  legend_plot <- ggplot(legend_df, aes(x = x, y = y, color = CellType)) +
+    geom_point(size = 4) +
+    scale_color_manual(values = celltype_colors, name = "Cell type") +
+    theme_void() +
+    theme(
+      legend.title      = element_text(size = 8, face = "bold"),
+      legend.text       = element_text(size = 7),
+      legend.key.size   = unit(0.5, "cm"),
+      legend.position   = "right"
+    )
+  legend_grob <- cowplot::get_legend(legend_plot)
+
+  # Combine dot plot + color legend side by side
+  cowplot::plot_grid(p, legend_grob, ncol = 2, rel_widths = c(1, 0.15))
+}
+
+# cowplot is typically available via Seurat; install if missing
+if (!requireNamespace("cowplot", quietly = TRUE)) install.packages("cowplot")
+library(cowplot)
+```
+
+### Resolution UMAPs & Dot Plots {.tabset}
+
+#### Res 0.1
+```{r res-0-1-umap}
 DimPlot(seurat_obj, 
         reduction="umap", raster=F,
         group.by="RNA_snn_res.0.1",
         label = T, label.box = T, repel=T) +
 theme(legend.position = "None") +
-ggtitle("Res 0.2")
+ggtitle("Res 0.1")
 ```
 
-### Res 0.3 
-```{r}
+```{r res-0-1-dotplot, fig.width=15, fig.height=5}
+make_dotplot("RNA_snn_res.0.1", "Res 0.1")
+```
+
+#### Res 0.3
+```{r res-0-3-umap}
 DimPlot(seurat_obj, 
         reduction="umap", raster=F,
         group.by="RNA_snn_res.0.3",
@@ -389,9 +503,12 @@ theme(legend.position = "None") +
 ggtitle("Res 0.3")
 ```
 
+```{r res-0-3-dotplot, fig.width=15, fig.height=5}
+make_dotplot("RNA_snn_res.0.3", "Res 0.3")
+```
 
-### Res 0.5 
-```{r}
+#### Res 0.5
+```{r res-0-5-umap}
 DimPlot(seurat_obj, 
         reduction="umap", raster=F,
         group.by="RNA_snn_res.0.5",
@@ -400,8 +517,12 @@ theme(legend.position = "None") +
 ggtitle("Res 0.5")
 ```
 
-### Res 0.7 
-```{r}
+```{r res-0-5-dotplot, fig.width=15, fig.height=5}
+make_dotplot("RNA_snn_res.0.5", "Res 0.5")
+```
+
+#### Res 0.7
+```{r res-0-7-umap}
 DimPlot(seurat_obj, 
         reduction="umap", raster=F,
         group.by="RNA_snn_res.0.7",
@@ -410,8 +531,12 @@ theme(legend.position = "None") +
 ggtitle("Res 0.7")
 ```
 
-### Res 0.9 
-```{r}
+```{r res-0-7-dotplot, fig.width=15, fig.height=5}
+make_dotplot("RNA_snn_res.0.7", "Res 0.7")
+```
+
+#### Res 0.9
+```{r res-0-9-umap}
 DimPlot(seurat_obj, 
         reduction="umap", raster=F,
         group.by="RNA_snn_res.0.9",
@@ -420,16 +545,28 @@ theme(legend.position = "None") +
 ggtitle("Res 0.9")
 ```
 
-### Res 1
-```{r}
+```{r res-0-9-dotplot, fig.width=15, fig.height=5}
+make_dotplot("RNA_snn_res.0.9", "Res 0.9")
+```
+
+#### Res 1
+```{r res-1-umap}
 DimPlot(seurat_obj, 
         reduction="umap", raster=F,
         group.by="RNA_snn_res.1",
         label = T, label.box = T, repel=T) +
 theme(legend.position = "None") +
-ggtitle("Res 0.9")
+ggtitle("Res 1.0")
 ```
 
+```{r res-1-dotplot, fig.width=15, fig.height=5}
+make_dotplot("RNA_snn_res.1", "Res 1.0")
+```
+
+Remove doublets
+```{r}
+seurat_obj <- subset(seurat_obj, doublet_finder == "Singlet")
+```
 
 # Cell Annotations
 
@@ -486,6 +623,124 @@ DimPlot(seurat_obj, group.by = "SingleR_monaco_fine", raster = F, label = TRUE, 
 DimPlot(seurat_obj, group.by = "SingleR_blueprint_fine", raster = F, label = TRUE, label.box = TRUE, repel = TRUE) + NoLegend()
 ```
 
+## CellTypist
+
+CellTypist is a Python-based tool for automated cell type classification. We interface with it via the `reticulate` package.
+
+```{r celltypist-setup}
+# Install reticulate if needed
+if (!requireNamespace("reticulate", quietly = TRUE)) install.packages("reticulate")
+library(reticulate)
+
+# Install celltypist into the active Python environment if absent
+tryCatch({
+  reticulate::py_install("celltypist", pip = TRUE)
+}, error = function(e) {
+  message("celltypist install skipped (may already be present): ", e$message)
+})
+
+celltypist   <- reticulate::import("celltypist")
+anndata      <- reticulate::import("anndata")
+scipy_sparse <- reticulate::import("scipy.sparse")
+```
+
+```{r celltypist-export}
+# Export log-normalised counts to an AnnData object (cells × genes)
+counts_matrix <- GetAssayData(seurat_obj, assay = "RNA", slot = "data")
+
+counts_csr <- scipy_sparse$csr_matrix(
+  list(
+    data    = counts_matrix@x,
+    indices = counts_matrix@i,
+    indptr  = counts_matrix@p
+  ),
+  shape = c(nrow(counts_matrix), ncol(counts_matrix))
+)
+
+adata <- anndata$AnnData(
+  X   = counts_csr$T$tocsr(),
+  obs = reticulate::r_to_py(data.frame(row.names = colnames(seurat_obj))),
+  var = reticulate::r_to_py(data.frame(row.names = rownames(seurat_obj)))
+)
+cat("AnnData object:", adata$n_obs, "cells ×", adata$n_vars, "genes\n")
+```
+
+```{r celltypist-predict}
+# Download the Immune_All_Low model (fine-grained PBMC annotations)
+# majority_voting smooths predictions within each Seurat cluster
+model <- celltypist$models$Model$load(model = "Immune_All_Low.pkl")
+
+predictions <- celltypist$annotate(
+  adata,
+  model           = model,
+  majority_voting = TRUE,
+  over_clustering = reticulate::r_to_py(
+    as.character(seurat_obj@meta.data$seurat_clusters)
+  )
+)
+
+cat("CellTypist annotation complete.\n")
+print(table(reticulate::py_to_r(predictions$predicted_labels$majority_voting)))
+```
+
+```{r celltypist-add-metadata}
+# Transfer labels back to the Seurat object
+seurat_obj <- AddMetaData(
+  seurat_obj,
+  metadata = reticulate::py_to_r(predictions$predicted_labels$predicted_labels),
+  col.name = "CellTypist_predicted"
+)
+seurat_obj <- AddMetaData(
+  seurat_obj,
+  metadata = reticulate::py_to_r(predictions$predicted_labels$majority_voting),
+  col.name = "CellTypist_majority_voting"
+)
+```
+
+```{r celltypist-umap, fig.width=14, fig.height=6}
+p_ct1 <- DimPlot(seurat_obj,
+                 group.by   = "CellTypist_predicted",
+                 reduction  = "umap", raster = FALSE,
+                 label = TRUE, label.box = TRUE, repel = TRUE, label.size = 3) +
+  NoLegend() + ggtitle("CellTypist – Per-Cell Predictions")
+
+p_ct2 <- DimPlot(seurat_obj,
+                 group.by   = "CellTypist_majority_voting",
+                 reduction  = "umap", raster = FALSE,
+                 label = TRUE, label.box = TRUE, repel = TRUE, label.size = 3) +
+  NoLegend() + ggtitle("CellTypist – Majority Voting (per Cluster)")
+
+p_ct1 + p_ct2
+```
+
+```{r celltypist-freq-table}
+ct_freq <- as.data.frame(table(seurat_obj@meta.data$CellTypist_majority_voting))
+colnames(ct_freq) <- c("CellType", "Count")
+ct_freq <- ct_freq[order(-ct_freq$Count), ]
+knitr::kable(ct_freq, row.names = FALSE,
+             caption = "CellTypist majority-voting label frequencies")
+```
+
+
+# Cell Count Summary
+
+```{r cell-count-summary}
+# Number of cells from CellRanger (raw, before any filtering)
+n_cells_cellranger <- length(colnames(Read10X(path_to_10x_file)))
+
+# Number of cells after full processing (post-QC + doublet removal)
+n_cells_processed <- ncol(seurat_obj)
+
+cat("============================================\n")
+cat("         Cell Count Summary\n")
+cat("============================================\n")
+cat(sprintf("Cells from CellRanger output : %d\n", n_cells_cellranger))
+cat(sprintf("Cells after QC & processing  : %d\n", n_cells_processed))
+cat(sprintf("Cells removed                : %d (%.1f%%)\n",
+            n_cells_cellranger - n_cells_processed,
+            (n_cells_cellranger - n_cells_processed) / n_cells_cellranger * 100))
+cat("============================================\n")
+```
 
 # Save Seurat object
 ```{r}
